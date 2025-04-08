@@ -1,0 +1,9 @@
+{ 
+  "name": "freenitial_yt_dlp_host", 
+  "description": "Download with yt-dlp", 
+  "path": "freenitial_yt_dlp_wrapper.bat", 
+  "type": "stdio", 
+  "allowed_origins": [ 
+    "chrome-extension://eiefmaojpldagjejillmkgobnhlapemh/" 
+  ] 
+} 
