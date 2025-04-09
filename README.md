@@ -1,13 +1,17 @@
 # Videos Download Reel Progress Bar
 
+__CREDITS TO YT-DLP https://github.com/yt-dlp/yt-dlp/__
+
+---
+
+## Description
+
 Add controls to Videos for supported websites : 
 - Youtube
 - Facebook
 - Instagram
 - TikTok 
 - X (Twitter)
-
----
 
 ## Features : 
 - Progress bar for reels with memorized volume
