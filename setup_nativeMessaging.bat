@@ -11,6 +11,11 @@ $host.UI.RawUI.WindowTitle = "Freential Videos Download Module Setup V1.0"
 Write-Host ""
 Write-Host "------------------------------------------"
 Write-Host ""
+Write-Host ""
+Write-Host ""
+Write-Host ""
+Write-Host ""
+Write-Host ""
 
 
 
@@ -59,7 +64,7 @@ if (Test-Path $extensionPath) {
 }
 elseif ($chromePath) {
     Write-Host " Extension not found for this profile, opening extension page, you can install it" -ForegroundColor Yellow
-    Start-Process "C:\Program Files\Google\Chrome\Application\chrome.exe" "https://chromewebstore.google.com/detail/Video-Download-Reel-ProgressBar-for-Youtube-Facebook-Instagram-TikTok-X/bacegihmkkfgjmemcdejcpgbnldppbkg"
+    Start-Process "C:\Program Files\Google\Chrome\Application\chrome.exe" "https://chromewebstore.google.com/detail/Video-Download-Reel-ProgressBar-for-Youtube-Facebook-Instagram-TikTok-X/$extension_ID"
 } 
 else {
     Write-Host " Chrome not found, please install chrome and launch again" -ForegroundColor Red
@@ -146,11 +151,22 @@ try {
 
 Write-Host " Extracting ffmpeg..."
 try {
-    New-Item -ItemType Directory -Force -Path "temp_extract" -ErrorAction Stop | Out-Null
+    if (-not (Test-Path "temp_extract")) {
+        try {
+            Write-Host " Creating temp_extract folder..."
+            New-Item -ItemType Directory -Force -Path "temp_extract" -ErrorAction Stop | Out-Null
+        } catch {
+            Write-Host " Failed to create temp_extract folder"  -ForegroundColor Red
+            $null = $Host.UI.RawUI.ReadKey("NoEcho,IncludeKeyDown")
+            exit 2
+        }
+    }
     Add-Type -AssemblyName System.IO.Compression.FileSystem
-    [System.IO.Compression.ZipFile]::ExtractToDirectory($zipfile, "temp_extract")
-} catch {
+    [System.IO.Compression.ZipFile]::ExtractToDirectory("$installPath\$zipfile", "$installPath\temp_extract")
+}
+catch {
     Write-Host " Error: Failed to extract ffmpeg." -ForegroundColor Red
+    Write-Host " Exception: $($_.Exception.Message)" -ForegroundColor Red
     $null = $Host.UI.RawUI.ReadKey("NoEcho,IncludeKeyDown")
     exit 2
 }
@@ -181,7 +197,7 @@ try {
 
 # ================================= ENDING ==================================
 Write-Host ""
-Write-Host " EXTENSION IS NOW INSTALLED."
+Write-Host " EXTENSION IS NOW INSTALLED." -ForegroundColor Green
 Write-Host " you can close this window and use extension."
 Write-Host ""
 $null = $Host.UI.RawUI.ReadKey("NoEcho,IncludeKeyDown")
