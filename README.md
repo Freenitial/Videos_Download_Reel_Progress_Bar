@@ -18,6 +18,12 @@ Add controls to Videos for supported websites :
 
 ![image](https://github.com/user-attachments/assets/a7586200-3f58-4adc-9e0e-79d9a91f4d2d)
 
+---
+
+## Requirements : 
+- Windows 10 build 1703 +
+- Powershell 5.1 +
+- Google Chrome
 
 ---
 
