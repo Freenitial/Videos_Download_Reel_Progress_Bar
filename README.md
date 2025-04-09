@@ -18,10 +18,6 @@ Features :
 
 ---
 
-<img width="311" alt="screenshot1" src="https://github.com/user-attachments/assets/68370823-c7d8-4699-b49c-a4807261f0a4" />
-
----
-
 ![image](https://github.com/user-attachments/assets/a7586200-3f58-4adc-9e0e-79d9a91f4d2d)
 
 
