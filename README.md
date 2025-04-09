@@ -9,7 +9,7 @@ Add controls to Videos for supported websites :
 
 ---
 
-Features : 
+## Features : 
 - Progress bar for reels with memorized volume
 - Download as Video (original)
 - Download and convert as MP4
