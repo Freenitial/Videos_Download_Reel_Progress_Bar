@@ -4,7 +4,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         chrome.runtime.sendNativeMessage("freenitial_yt_dlp_host", payload, response => {
             if (chrome.runtime.lastError) {
                 console.warn("[Background] Native messaging error:", chrome.runtime.lastError.message);
-                sendResponse({ success: false, message: "To use this function, you need to install this (download and open):\nhttps://github.com/Freenitial/Videos_Download_Reel_Progress_Bar/releases/latest/download/setup_nativeMessaging_v1.0.bat" });
+                sendResponse({ success: false, message: "To use this function, you need to install this (download and open):\nhttps://github.com/Freenitial/Videos_Download_Reel_Progress_Bar/releases/latest/download/setup_nativeMessaging.bat" });
                 return;
             }
             if (response && response.success) {
