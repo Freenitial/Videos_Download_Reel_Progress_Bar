@@ -16,8 +16,6 @@ Features :
 - Download and convert as MP3
 - Cut / Trim
 
----
-
 ![image](https://github.com/user-attachments/assets/a7586200-3f58-4adc-9e0e-79d9a91f4d2d)
 
 
