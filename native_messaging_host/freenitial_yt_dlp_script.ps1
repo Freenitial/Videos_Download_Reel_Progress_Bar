@@ -65,21 +65,10 @@ try {
     $inputJson = [System.Text.Encoding]::UTF8.GetString($inputBytes) 
     $inputData = $inputJson | ConvertFrom-Json 
      
-    if ($inputData.URL) { 
-        $url = $inputData.URL
-        Log "Input URL = $url" 
-    }
-    elseif ($inputData.SHOW) {
-        $fileToShow = $inputData.SHOW
-        Log "File to show = $fileToShow"
-    }
-    elseif ($inputData.COPY) {
-        $fileToCopy = $inputData.COPY
-        Log "File to copy = $fileToCopy"
-    }
-    else {
-        throw "No valid parameter provided."
-    }
+    if ($inputData.URL) { $url = $inputData.URL ; Log "Input URL = $url" }
+    elseif ($inputData.SHOW) { $fileToShow = $inputData.SHOW ; Log "File to show = $fileToShow" }
+    elseif ($inputData.COPY) { $fileToCopy = $inputData.COPY ; Log "File to copy = $fileToCopy" }
+    else { throw "No valid parameter provided." }
 } 
 catch { 
     Log "Input read error: $_" 
@@ -152,15 +141,9 @@ if ($inputData.URL) {
             } else {
                 $sanitized_title = $tempTitle.Trim()
                 $sanitized_title = [regex]::Replace($sanitized_title, '[^\p{L}\p{N}\s-]', '')
-                if ($sanitized_title.Length -gt 35) { 
-                    $sanitized_title = $sanitized_title.Substring(0,35).Trim()
-                    Log "Sanitized title truncated to 35 characters: $sanitized_title"
-                } elseif ($sanitized_title.Length -lt 5) { 
-                    $sanitized_title = $uuid.Substring(0,17)
-                    Log "Sanitized title too short, using UUID instead: $sanitized_title"
-                } else {
-                    Log "Sanitized title: $sanitized_title"
-                }
+                if ($sanitized_title.Length -gt 35) { $sanitized_title = $sanitized_title.Substring(0,35).Trim() ; Log "Sanitized title truncated to 35 characters: $sanitized_title" }
+                elseif ($sanitized_title.Length -lt 5) { $sanitized_title = $uuid.Substring(0,17) ; Log "Sanitized title too short, using UUID instead: $sanitized_title" }
+                else { Log "Sanitized title: $sanitized_title" }
             }
 
             $extension = [IO.Path]::GetExtension($downloaded_path)
@@ -168,10 +151,7 @@ if ($inputData.URL) {
             $newFileName = "$sanitized_title$extension"
             $destination = Join-Path $downloadDir $newFileName
             if ($tempTitle -ne $uuid) { 
-                if (Test-Path $destination) { 
-                    Remove-Item $destination -Force 
-                    Log "Existing file at destination removed: $destination"
-                }
+                if (Test-Path $destination) { Remove-Item $destination -Force ; Log "Existing file at destination removed: $destination" }
                 Rename-Item -Path $downloaded_path -NewName $newFileName
                 Log "Renamed file from $downloaded_path to $destination"
             }
@@ -186,14 +166,13 @@ if ($inputData.URL) {
                     $stringCollection.Add($fileToCopy)
                     [System.Windows.Forms.Clipboard]::SetFileDropList($stringCollection)
                     Log "File copied to clipboard: $fileToCopy"
-                } catch { Log "Failed to copy file at end" }
+                } 
+                catch { Log "Failed to copy file at end" }
             }
             Send-NativeMessage @{ success = $true; finalPath = $newFile.FullName }
             if ($inputData.bipAtEnd) {
-                try { 
-                    (New-Object Media.SoundPlayer "C:\Windows\Media\notify.wav").PlaySync()
-                    Log "Bip sound played"
-                } catch { Log "Failed to play bip sound 'C:\Windows\Media\notify.wav'" }
+                try { (New-Object Media.SoundPlayer "C:\Windows\Media\notify.wav").PlaySync() ; Log "Bip sound played" } 
+                catch { Log "Failed to play bip sound 'C:\Windows\Media\notify.wav'" }
             }
         } else {
             Log "yt-dlp failed with exit code $($process.ExitCode)."
