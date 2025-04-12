@@ -41,6 +41,7 @@ function Send-NativeMessage {
 #-------------------------- 
 # Initialization 
 #-------------------------- 
+$localPath = $MyInvocation.MyCommand.Path
 $currentDate = Get-Date -Format "ddMMyyyy" 
 $basePath = if ($PSScriptRoot) { $PSScriptRoot } else { (Get-Location).Path } 
 $ytDlpPathEXE = Join-Path $basePath "yt-dlp.exe" 
@@ -74,7 +75,26 @@ catch {
     Log "Input read error: $_" 
     Send-NativeMessage @{ success = $false; message = "Input error: $_" } 
     exit 
-} 
+}
+
+
+#--------------------------
+# Auto-update Check
+#--------------------------
+$release = Invoke-RestMethod "https://api.github.com/repos/Freenitial/Videos_Download_Reel_Progress_Bar/releases/latest" | Out-Null
+$asset = $release.assets | Where-Object { $_.name -eq "freenitial_yt_dlp_script.ps1" }
+$onlineDate = [datetime]$asset.updated_at
+$localDate = (Get-Item $localPath).LastWriteTime.ToUniversalTime()
+if ($onlineDate -gt $localDate -and -not (Test-Path $tempFile)) {
+    Invoke-WebRequest "https://github.com/Freenitial/Videos_Download_Reel_Progress_Bar/releases/download/v1.0/freenitial_yt_dlp_script.ps1" -OutFile $localPath | Out-Null
+    Start-Sleep -Seconds 1
+    $tempFile = Join-Path $PSScriptRoot "native_input.tmp"
+    [System.IO.File]::WriteAllBytes($tempFile, $storedInput)
+    cmd.exe /c "type `"$tempFile`" | powershell -nologo -noprofile -executionpolicy bypass -WindowStyle Hidden -File `"$localPath`"" >$null 2>&1
+    # Remove-Item $tempFile -Force
+    exit
+}
+
 
  
 #-------------------------- 
