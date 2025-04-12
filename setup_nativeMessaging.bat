@@ -13,15 +13,21 @@ $host.UI.RawUI.WindowTitle = "Freential Videos Download Module Setup V1.1"
 Write-Host ""
 
 $nativeMessagerName = "freenitial_yt_dlp_host"
-$ModuleManifestFile = "$nativeMessagerName.json"
+$File_ModuleManifest = "$nativeMessagerName.json"
 $installPath        = "$env:programdata\Videos Download - Reel Progress Bar"
 $extension_ID       = "hipgpgddfihbabbeomabnkakidlmaean"
 $logFile = Join-Path (Get-Location) "setup_nativeMessaging.log"
 
+$module_files = @("$File_ModuleManifest", "freenitial_yt_dlp_wrapper.bat", "freenitial_yt_dlp_script.ps1")
+$extension_files = @("manifest.json", "content.js", "background.js", "icon-16.png", "icon-48.png", "icon-128.png")
+
+
+
+
 
 if (-not (Test-Path $installPath)) {
-    try { Log "Creating folder '$installPath'..." ; New-Item -ItemType Directory -Force -Path $installPath -ErrorAction Stop | Out-Null } 
-    catch { Log "Error: Failed to create folder '$installPath'" }
+    try { Write-Host "Creating folder '$installPath'..." ; New-Item -ItemType Directory -Force -Path $installPath -ErrorAction Stop | Out-Null } 
+    catch { Write-Host "Error: Failed to create folder '$installPath'" -ForegroundColor "Red" ; $null = $Host.UI.RawUI.ReadKey("NoEcho,IncludeKeyDown") ; exit 2 }
 }
 Set-Location $installPath
 
@@ -45,9 +51,45 @@ function Log {
 if (Test-Path $logFile) { Log "" ; Log " --------------------------------" -NoConsole ; Log "" -NoConsole }
 
 
+function Test-FileUpToDate {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$FileURL,
+        [Parameter(Mandatory = $false)]
+        [string]$FileLocal
+    )
+    try {
+        $assetName = Split-Path $FileURL -Leaf
+        if (-not $FileLocal) { $FileLocal = Join-Path $(Get-Location) $assetName }
+        $uri = [uri]$FileURL
+        $segments = $uri.Segments
+        if ($segments.Count -lt 3) { Log "Error: Invalid GitHub URL format." }
+        $owner = $segments[1].TrimEnd('/')
+        $repo  = $segments[2].TrimEnd('/')
+        $apiURL = "https://api.github.com/repos/$owner/$repo/releases/latest"
+        $release = Invoke-RestMethod -Uri $apiURL
+        $asset = $release.assets | Where-Object { $_.name -eq $assetName }
+        if (-not $asset) { Log "Error: Asset '$assetName' not found in the latest release." }
+        if (-not (Test-Path $FileLocal)) { Log "Local file '$assetName' does not exist." ; Invoke-Download $FileURL $assetName ; return $false }
+        $localFile = Get-Item $FileLocal
+        if ($localFile.Length -ne $asset.size) { Log "File size mismatch. Local: $($localFile.Length), Online: $($asset.size)" ; Invoke-Download $FileURL $assetName ; return $false }
+        $localDate = $localFile.LastWriteTime
+        $onlineDate = ([datetime]$asset.updated_at).ToLocalTime()
+        if ($localDate -lt $onlineDate) { Log "Local file is older. Local: $localDate, Online: $onlineDate" ; Invoke-Download $FileURL $assetName ; return $false }
+        Log "$assetName is up to date"
+        return $true
+    }
+    catch { Log "Error in Test-FileUpToDate: $($_.Exception.Message)" }
+}
+
+
+
+
 
 function Invoke-Download {
     param([Parameter(Mandatory = $true)][string]$Url, [string]$FileName)
+    Log "Downloading $(if ($FileName) {$Filename} else {$Url})..."
     $destination = Join-Path (Get-Location) $(if ([string]::IsNullOrEmpty($FileName)) { [System.IO.Path]::GetFileName($Url) } else { $FileName })
     if (Test-Path $destination) {
         try { Remove-Item -Path $destination -Force -ErrorAction Stop }
@@ -88,7 +130,7 @@ function Invoke-Download {
         $line = ("[{0}] 100% - Download complete" -f ($progressSymbol * $barLength))
         Log "`r$line"
     }
-    catch { Log "Download failed: $($_.Exception.Message)" }
+    catch { Log "Error: Download failed: $($_.Exception.Message)" }
     finally {
         if ($inputStream) { try { $inputStream.Dispose() } catch {} }
         if ($outputStream) { try { $outputStream.Dispose() } catch {} }
@@ -99,9 +141,7 @@ function Invoke-Download {
 
 
 # ================= DOWNLOAD NATIVE MESSAGING MANIFEST FILE ==================
-Log "Downloading background manifest file..."
-Invoke-Download "https://github.com/Freenitial/Videos_Download_Reel_Progress_Bar/releases/latest/download/$ModuleManifestFile"
-
+foreach ($file in $module_files) { Test-FileUpToDate $("https://github.com/Freenitial/Videos_Download_Reel_Progress_Bar/releases/latest/download/$file") | Out-Null }
 
 
 
@@ -110,23 +150,11 @@ Log "Creating registry keys in HKCU\Software\Google\Chrome\NativeMessagingHosts\
 try {
     Remove-Item -Path "HKCU:\Software\Google\Chrome\NativeMessagingHosts\$nativeMessagerName" -Force -ErrorAction SilentlyContinue
     New-Item -Path "HKCU:\Software\Google\Chrome\NativeMessagingHosts" -Name "$nativeMessagerName" -Force -ErrorAction Stop | Out-Null
-    Set-ItemProperty -Path "HKCU:\Software\Google\Chrome\NativeMessagingHosts\$nativeMessagerName" -Name '(default)' -Value "$installPath\$ModuleManifestFile" -ErrorAction Stop
+    Set-ItemProperty -Path "HKCU:\Software\Google\Chrome\NativeMessagingHosts\$nativeMessagerName" -Name '(default)' -Value "$installPath\$File_ModuleManifest" -ErrorAction Stop
 } 
 catch { Log "Error: Failed to create registry keys for native messaging." }
 
 
-
-
-# ==================== DOWNLOAD NATIVE MESSAGING WRAPPER =====================
-Log "Downloading background script wrapper..."
-Invoke-Download "https://github.com/Freenitial/Videos_Download_Reel_Progress_Bar/releases/latest/download/freenitial_yt_dlp_wrapper.bat"
-
-
-
-
-# ===================== DOWNLOAD NATIVE MESSAGING SCRIPT =====================
-Log "Downloading main background script..."
-Invoke-Download "https://github.com/Freenitial/Videos_Download_Reel_Progress_Bar/releases/latest/download/freenitial_yt_dlp_script.ps1"
 
 
 
@@ -156,18 +184,12 @@ else {
     $userInput = Read-Host " Press Enter to open the extension webpage, or type 'manual' to install the unpacked version"
     if ($userInput -eq "manual") {
         Log "Installing unpacked version..."
-        Log "Downloading manifest.js..."
-        Invoke-Download "https://github.com/Freenitial/Videos_Download_Reel_Progress_Bar/releases/latest/download/manifest.json"
-        Log "Downloading content.js..."
-        Invoke-Download "https://github.com/Freenitial/Videos_Download_Reel_Progress_Bar/releases/latest/download/content.js"
-        Log "Downloading background.js..."
-        Invoke-Download "https://github.com/Freenitial/Videos_Download_Reel_Progress_Bar/releases/latest/download/background.js"
-        Log "Creating icons folder..."
-        New-Item -Path "$installPath\icons" -ItemType Directory -Force -ErrorAction Stop | Out-Null
-        Log "Downloading icons..."
-        Invoke-Download "https://github.com/Freenitial/Videos_Download_Reel_Progress_Bar/releases/latest/download/icon-16.png"  "icons\icon-16.png"
-        Invoke-Download "https://github.com/Freenitial/Videos_Download_Reel_Progress_Bar/releases/latest/download/icon-48.png"  "icons\icon-48.png"
-        Invoke-Download "https://github.com/Freenitial/Videos_Download_Reel_Progress_Bar/releases/latest/download/icon-128.png" "icons\icon-128.png"
+        foreach ($file in $extension_files) { 
+            Test-FileUpToDate `
+                $("https://github.com/Freenitial/Videos_Download_Reel_Progress_Bar/releases/latest/download/$file") `
+                $(if ($file -match '^icon-.*\.png$') { "icons\$file" } else { $file }) `
+            | Out-Null
+        }
         Log "Asking user to add unpacked extension..." -NoConsole
         Write-Host ""
         Write-Host "  1)" -ForegroundColor Green -NoNewline
@@ -194,8 +216,8 @@ else {
         Write-Host ""
         $null = $Host.UI.RawUI.ReadKey('NoEcho,IncludeKeyDown')
         Log "Please wait..."
-        $securePreferencesPath = "$env:localappdata\Google\Chrome\User Data\Default\Secure Preferences" 
-        $pathToFind = "" 
+        $securePreferencesPath = "$latestChromeProfilePath\Secure Preferences" 
+        $pathToFind = $installPath
         if (Test-Path $securePreferencesPath) {
             Log "Secure preferences file found at '$securePreferencesPath'. Attempting to read and parse..."
             try { $json = Get-Content -Path $securePreferencesPath -Raw | ConvertFrom-Json ; Log "Secure preferences parsed successfully." } 
@@ -218,13 +240,13 @@ else {
             } 
             else { Log "Error: Extension settings not found or invalid in secure preferences." }
             if ($foundExtensionId) {
-                Log "Attempting to update manifest file at '$manifestPath'."
+                Log "Attempting to update manifest file at '$installPath\$File_ModuleManifest'."
                 try {
-                    $jsonObject = Get-Content -Path "$installPath\$ModuleManifestFile" -Raw | ConvertFrom-Json
+                    $jsonObject = Get-Content -Path "$installPath\$File_ModuleManifest" -Raw | ConvertFrom-Json
                     $jsonObject.name = $nativeMessagerName
-                    $jsonObject.path = "$installPath\$ModuleManifestFile"
+                    $jsonObject.path = "$installPath\$File_ModuleManifest"
                     $jsonObject.allowed_origins = @("chrome-extension://$foundExtensionId/")
-                    $jsonObject | ConvertTo-Json | Out-File -FilePath $manifestPath -Encoding UTF8
+                    $jsonObject | ConvertTo-Json | Out-File -FilePath "$installPath\$File_ModuleManifest" -Encoding UTF8
                     Log "Manifest file updated successfully."
                 } 
                 catch { Log "Error updating manifest file: $_"  }
@@ -242,28 +264,25 @@ else {
 
 
 # ======================= DOWNLOAD AND EXTRACT YT-DLP ========================
-Log "Downloading yt-dlp..."
-Invoke-Download "https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp.exe"
+Test-FileUpToDate "https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp.exe" | Out-Null
 
-Log "Downloading ffmpeg..."
-$zipfile = "ffmpeg.zip"
-Invoke-Download "https://github.com/yt-dlp/FFmpeg-Builds/releases/latest/download/ffmpeg-master-latest-win64-gpl.zip" $zipfile
 
-Log "Extracting .exe files..."
-try {
-    $zip = [System.IO.Compression.ZipFile]::OpenRead($zipfile)
-    $zip.Entries.Where({ !$_.PSIsContainer -and $_.Name -like "*.exe" }) | ForEach-Object {
-        $destinationPath = Join-Path (Get-Location).Path $_.Name
-        try {[System.IO.Compression.ZipFileExtensions]::ExtractToFile($_, $destinationPath, $true) ; Log "Extracted: $($_.Name)" } 
-        catch { Log "Extraction error: $($_.FullName) - $($_.Exception.Message)" }
+$ffmpegZIPname = "ffmpeg-master-latest-win64-lgpl.zip"
+if (-not (Test-FileUpToDate "https://github.com/BtbN/FFmpeg-Builds/releases/latest/download/$ffmpegZIPname" | Out-Null)) {
+    Log "Extracting .exe files..."
+    try     {
+        $zip = [System.IO.Compression.ZipFile]::OpenRead("$installPath\$ffmpegZIPname")
+        $zip.Entries.Where({ !$_.PSIsContainer -and $_.Name -like "*.exe" }) | ForEach-Object {
+            $destinationPath = Join-Path $installPath $_.Name
+            try   {[System.IO.Compression.ZipFileExtensions]::ExtractToFile($_, $destinationPath, $true) ; Log "Extracted: $($_.Name)" } 
+            catch { Log "Extraction error: $($_.FullName) - $($_.Exception.Message)" }
+        }
     }
+    catch   { Log "Error processing ZIP file '$ffmpegZIPname': $($_.Exception.Message)" }
+    finally { if ($null -ne $zip) { $zip.Dispose() ; Log "ZIP archive handle released." } }
 }
-catch { Log "Error processing ZIP file '$zipfile': $($_.Exception.Message)" }
-finally {
-    if ($null -ne $zip) { $zip.Dispose() ; Log "ZIP archive handle released." }
-    try { Remove-Item -Path $zipfile -Force -ErrorAction Stop ; Log "ZIP file deleted: $zipfile"}
-    catch { Log "Warning: Could not delete ZIP file '$zipfile': $($_.Exception.Message)" }
-}
+
+
 
 
 
@@ -271,7 +290,7 @@ finally {
 # ================================= ENDING ==================================
 Log ""
 Log "MODULE FOR EXTENSION IS NOW INSTALLED." 
-Write-Host "you can use extension. Type any key to close this window." -ForegroundColor Green
+Write-Host " you can use extension. Type any key to close this window." -ForegroundColor Green
 Log ""
 
 $null = $Host.UI.RawUI.ReadKey("NoEcho,IncludeKeyDown")
