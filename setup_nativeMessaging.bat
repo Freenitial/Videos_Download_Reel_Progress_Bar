@@ -4,7 +4,6 @@
 #>
 
 
-
 Add-Type -AssemblyName System.IO.Compression.FileSystem
 Add-Type -AssemblyName System.Net.Http
 
@@ -24,7 +23,6 @@ $extension_files = @("manifest.json", "content.js", "background.js", "icon-16.pn
 
 
 
-
 if (-not (Test-Path $installPath)) {
     try { Write-Host "Creating folder '$installPath'..." ; New-Item -ItemType Directory -Force -Path $installPath -ErrorAction Stop | Out-Null } 
     catch { Write-Host "Error: Failed to create folder '$installPath'" -ForegroundColor "Red" ; $null = $Host.UI.RawUI.ReadKey("NoEcho,IncludeKeyDown") ; exit 2 }
@@ -34,6 +32,7 @@ Set-Location $installPath
 
 
 
+# ============================ UTILITY FUNCTIONS =============================
 function Log {
     param([string]$message, [switch]$NoNewline, [switch]$NoConsole)
     $isError = $message.ToLower().Contains("error")
@@ -61,7 +60,7 @@ function Test-FileUpToDate {
     )
     try {
         $assetName = Split-Path $FileURL -Leaf
-        if (-not $FileLocal) { $FileLocal = Join-Path $(Get-Location) $assetName }
+        if (-not $FileLocal) { $FileLocal = Join-Path $(Get-Location) $assetName } else { $destination = $FileLocal }
         $uri = [uri]$FileURL
         $segments = $uri.Segments
         if ($segments.Count -lt 3) { Log "Error: Invalid GitHub URL format." }
@@ -71,12 +70,12 @@ function Test-FileUpToDate {
         $release = Invoke-RestMethod -Uri $apiURL
         $asset = $release.assets | Where-Object { $_.name -eq $assetName }
         if (-not $asset) { Log "Error: Asset '$assetName' not found in the latest release." }
-        if (-not (Test-Path $FileLocal)) { Log "Local file '$assetName' does not exist." ; Invoke-Download $FileURL $assetName ; return $false }
+        if (-not (Test-Path $FileLocal)) { Log "Local file '$assetName' does not exist." ; Invoke-Download $FileURL $(if ($destination) {$destination} else {$assetName}) ; return $false }
         $localFile = Get-Item $FileLocal
-        if ($localFile.Length -ne $asset.size) { Log "File size mismatch. Local: $($localFile.Length), Online: $($asset.size)" ; Invoke-Download $FileURL $assetName ; return $false }
+        if ($localFile.Length -ne $asset.size) { Log "File size mismatch. Local: $($localFile.Length), Online: $($asset.size)" ; Invoke-Download $FileURL $(if ($destination) {$destination} else {$assetName}) ; return $false }
         $localDate = $localFile.LastWriteTime
         $onlineDate = ([datetime]$asset.updated_at).ToLocalTime()
-        if ($localDate -lt $onlineDate) { Log "Local file is older. Local: $localDate, Online: $onlineDate" ; Invoke-Download $FileURL $assetName ; return $false }
+        if ($localDate -lt $onlineDate) { Log "Local file is older. Local: $localDate, Online: $onlineDate" ; Invoke-Download $FileURL $(if ($destination) {$destination} else {$assetName}) ; return $false }
         Log "$assetName is up to date"
         return $true
     }
@@ -84,17 +83,16 @@ function Test-FileUpToDate {
 }
 
 
-
-
-
 function Invoke-Download {
     param([Parameter(Mandatory = $true)][string]$Url, [string]$FileName)
     Log "Downloading $(if ($FileName) {$Filename} else {$Url})..."
-    $destination = Join-Path (Get-Location) $(if ([string]::IsNullOrEmpty($FileName)) { [System.IO.Path]::GetFileName($Url) } else { $FileName })
+    $destination = $(if ([string]::IsNullOrEmpty($FileName)) { Join-Path (Get-Location) [System.IO.Path]::GetFileName($Url) } else { $FileName })
     if (Test-Path $destination) {
         try { Remove-Item -Path $destination -Force -ErrorAction Stop }
         catch { Log "Error deleting existing file '$destination': $($_.Exception.Message)" }
-    }
+    } 
+    else { [System.IO.Directory]::CreateDirectory([System.IO.Path]::GetDirectoryName($destination)) | Out-Null }
+    write-host "destination = $destination"
     $httpClient = [System.Net.Http.HttpClient]::new()
     $inputStream = $outputStream = $null
     $progressSymbol = "-"
@@ -140,8 +138,10 @@ function Invoke-Download {
 
 
 
+
 # ================= DOWNLOAD NATIVE MESSAGING MANIFEST FILE ==================
 foreach ($file in $module_files) { Test-FileUpToDate $("https://github.com/Freenitial/Videos_Download_Reel_Progress_Bar/releases/latest/download/$file") | Out-Null }
+
 
 
 
@@ -153,7 +153,6 @@ try {
     Set-ItemProperty -Path "HKCU:\Software\Google\Chrome\NativeMessagingHosts\$nativeMessagerName" -Name '(default)' -Value "$installPath\$File_ModuleManifest" -ErrorAction Stop
 } 
 catch { Log "Error: Failed to create registry keys for native messaging." }
-
 
 
 
@@ -177,20 +176,25 @@ if (Test-Path $chromeAppdataPath) {
 $extensionPath = Join-Path -Path $latestChromeProfilePath -ChildPath "Extensions\$extension_ID"
 
 
+
+
 # ====================== OPTIONNAL MANUAL INSTALLATION =======================
 if (Test-Path $extensionPath) { Log  "Extension found for recent profile : '$latestChromeProfilePath'" }
 else {
-    Log "Warning: Extension not found for this profile."
-    $userInput = Read-Host " Press Enter to open the extension webpage, or type 'manual' to install the unpacked version"
+    Write-Host "" ; Log "Warning: Extension not found for this profile."
+    $userInput = Read-Host " Press Enter to open the extension webpage, or type 'manual' to install the unpacked version" -ForegroundColor Yellow ; Write-Host ""
     if ($userInput -eq "manual") {
         Log "Installing unpacked version..."
         foreach ($file in $extension_files) { 
             Test-FileUpToDate `
                 $("https://github.com/Freenitial/Videos_Download_Reel_Progress_Bar/releases/latest/download/$file") `
-                $(if ($file -match '^icon-.*\.png$') { "icons\$file" } else { $file }) `
+                $(if ($file -match '^icon-.*\.png$') { $(Join-Path (Get-Location) "icons\$file") } else { $file }) `
             | Out-Null
         }
         Log "Asking user to add unpacked extension..." -NoConsole
+        $attribs = (Get-Item -Path $env:ProgramData).Attributes
+        $wasHidden = $attribs -band [System.IO.FileAttributes]::Hidden
+        if ($wasHidden) { (Get-Item -Path $env:ProgramData).Attributes = $attribs -bxor [System.IO.FileAttributes]::Hidden }
         Write-Host ""
         Write-Host "  1)" -ForegroundColor Green -NoNewline
         Write-Host "  OPEN CHROME, COPY-PASTE THIS IN YOUR ADDRESS BAR : " -ForegroundColor Yellow -NoNewline
@@ -215,6 +219,7 @@ else {
         Write-Host " press any key to continue"
         Write-Host ""
         $null = $Host.UI.RawUI.ReadKey('NoEcho,IncludeKeyDown')
+        if ($wasHidden) { (Get-Item -Path $env:ProgramData).Attributes = (Get-Item -Path $env:ProgramData).Attributes -bor [System.IO.FileAttributes]::Hidden }
         Log "Please wait..."
         $securePreferencesPath = "$latestChromeProfilePath\Secure Preferences" 
         $pathToFind = $installPath
@@ -281,8 +286,6 @@ if (-not (Test-FileUpToDate "https://github.com/BtbN/FFmpeg-Builds/releases/late
     catch   { Log "Error processing ZIP file '$ffmpegZIPname': $($_.Exception.Message)" }
     finally { if ($null -ne $zip) { $zip.Dispose() ; Log "ZIP archive handle released." } }
 }
-
-
 
 
 
