@@ -617,7 +617,7 @@ const createDownloadMenu = video => {
     e.stopPropagation();
     const cut = getCutValue();
     if (cutCheckbox.checked && !cut) return;
-    extractAndDownloadVideo(true, cut, false, bipAtEndCheckbox.checked, copyAtEndCheckbox.checked, useChromeCookiesCheckbox.checked, false, false);
+    extractAndDownloadVideo(true, cut, false, bipAtEndCheckbox.checked, copyAtEndCheckbox.checked, useChromeCookiesCheckbox.checked, storedLink, false);
   });
 
   return menu;
