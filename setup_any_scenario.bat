@@ -221,15 +221,16 @@ else {
         $pathToFind = $installPath
         if (Test-Path $securePreferencesPath) {
             Log "Secure preferences file found at '$securePreferencesPath'. Attempting to read and parse..."
-            try { $json = Get-Content -Path $securePreferencesPath -Raw | ConvertFrom-Json ; Log "Secure preferences parsed successfully." } 
+            try { $json = Get-Content -Path $securePreferencesPath -Raw | ConvertFrom-Json ; Log "Secure preferences parsed successfully." }
             catch { Log "Error parsing secure preferences: $_" }
             $foundExtensionId = $null
-            if ($json -and $json.extensions -and $json.extensions.settings) {
-                Log "Searching for extension path in settings..."
-                try {
-                    $timeoutSeconds = 15
-                    $foundExtensionId = $null
-                    for ($i = 0; $i -lt $timeoutSeconds; $i++) {
+            if (Test-Path $securePreferencesPath) {
+                Log "Monitoring secure preferences for extension path..."
+                $loops = 15
+                for ($i = 0; $i -lt $loops; $i++) {
+                    try { $json = Get-Content -Path $securePreferencesPath -Raw | ConvertFrom-Json }
+                    catch { Start-Sleep -Seconds 2 ; continue }
+                    if ($json -and $json.extensions -and $json.extensions.settings) {
                         foreach ($id in $json.extensions.settings.PSObject.Properties.Name) {
                             $ext = $json.extensions.settings.$id
                             if ($ext.path -eq $pathToFind) {
@@ -238,13 +239,12 @@ else {
                                 break
                             }
                         }
-                        if ($foundExtensionId) { break }
-                        Start-Sleep -Seconds 1
                     }
-                    if (-not $foundExtensionId) { Log "Error: Extension path '$pathToFind' not found in secure preferences." }
-                } 
-                catch { Log "Error while iterating extension settings: $_" }
-            } 
+                    if ($foundExtensionId) { break }
+                    Start-Sleep -Seconds 2
+                }
+                if (-not $foundExtensionId) { Log "Error: Extension path '$pathToFind' not found in secure preferences after waiting $loops seconds." }
+            }
             else { Log "Error: Extension settings not found or invalid in secure preferences." }
             if ($foundExtensionId) {
                 Log "Attempting to update manifest file at '$installPath\$File_ModuleManifest'."
