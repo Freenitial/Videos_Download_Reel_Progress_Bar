@@ -216,12 +216,12 @@ if ($inputData.URL) {
         } 
         else {
             Log "yt-dlp failed with exit code $($process.ExitCode)."
-            Send-NativeMessage @{ success = $false; message = "yt-dlp failed with exit code $($process.ExitCode)." }
+            Send-NativeMessage @{ success = $false; message = "yt-dlp failed with exit code $($process.ExitCode).<br>If the error persist, please retry in a few hours/days." }
         }
     } 
     catch {
         Log "Error executing yt-dlp: $_"
-        Send-NativeMessage @{ success = $false; message = "Error executing yt-dlp: $_" }
+        Send-NativeMessage @{ success = $false; message = "Error executing yt-dlp: $_ <br>If the error persist, please retry in a few hours/days." }
     }
 }
 elseif ($inputData.SHOW) {
