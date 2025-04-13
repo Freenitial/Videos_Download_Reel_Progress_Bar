@@ -20,9 +20,6 @@ $logFile = Join-Path (Get-Location) "setup_nativeMessaging.log"
 $module_files = @("$File_ModuleManifest", "freenitial_yt_dlp_wrapper.bat", "freenitial_yt_dlp_script.ps1")
 $extension_files = @("manifest.json", "content.js", "background.js", "icon-16.png", "icon-48.png", "icon-128.png")
 
-
-
-
 if (-not (Test-Path $installPath)) {
     try { Write-Host "Creating folder '$installPath'..." ; New-Item -ItemType Directory -Force -Path $installPath -ErrorAction Stop | Out-Null } 
     catch { Write-Host "Error: Failed to create folder '$installPath'" -ForegroundColor "Red" ; $null = $Host.UI.RawUI.ReadKey("NoEcho,IncludeKeyDown") ; exit 2 }
@@ -60,7 +57,8 @@ function Test-FileUpToDate {
     )
     try {
         $assetName = Split-Path $FileURL -Leaf
-        if (-not $FileLocal) { $FileLocal = Join-Path $(Get-Location) $assetName } else { $destination = $FileLocal }
+        if (-not $FileLocal) { $FileLocal = Join-Path $(Get-Location) $assetName } 
+        if (-not [System.IO.Path]::GetDirectoryName($FileLocal)) { $FileLocal = Join-Path $(Get-Location) $FileLocal }
         $uri = [uri]$FileURL
         $segments = $uri.Segments
         if ($segments.Count -lt 3) { Log "Error: Invalid GitHub URL format." }
@@ -70,12 +68,12 @@ function Test-FileUpToDate {
         $release = Invoke-RestMethod -Uri $apiURL
         $asset = $release.assets | Where-Object { $_.name -eq $assetName }
         if (-not $asset) { Log "Error: Asset '$assetName' not found in the latest release." }
-        if (-not (Test-Path $FileLocal)) { Log "Local file '$assetName' does not exist." ; Invoke-Download $FileURL $(if ($destination) {$destination} else {$assetName}) ; return $false }
+        if (-not (Test-Path $FileLocal)) { Log "Local file '$assetName' does not exist." ; Invoke-Download $FileURL $FileLocal ; return $false }
         $localFile = Get-Item $FileLocal
-        if ($localFile.Length -ne $asset.size) { Log "File size mismatch. Local: $($localFile.Length), Online: $($asset.size)" ; Invoke-Download $FileURL $(if ($destination) {$destination} else {$assetName}) ; return $false }
+        if ($localFile.Length -ne $asset.size) { Log "File size mismatch. Local: $($localFile.Length), Online: $($asset.size)" ; Invoke-Download $FileURL $FileLocal ; return $false }
         $localDate = $localFile.LastWriteTime
         $onlineDate = ([datetime]$asset.updated_at).ToLocalTime()
-        if ($localDate -lt $onlineDate) { Log "Local file is older. Local: $localDate, Online: $onlineDate" ; Invoke-Download $FileURL $(if ($destination) {$destination} else {$assetName}) ; return $false }
+        if ($localDate -lt $onlineDate) { Log "Local file is older. Local: $localDate, Online: $onlineDate" ; Invoke-Download $FileURL $FileLocal ; return $false }
         Log "$assetName is up to date"
         return $true
     }
@@ -87,12 +85,8 @@ function Invoke-Download {
     param([Parameter(Mandatory = $true)][string]$Url, [string]$FileName)
     Log "Downloading $(if ($FileName) {$Filename} else {$Url})..."
     $destination = $(if ([string]::IsNullOrEmpty($FileName)) { Join-Path (Get-Location) [System.IO.Path]::GetFileName($Url) } else { $FileName })
-    if (Test-Path $destination) {
-        try { Remove-Item -Path $destination -Force -ErrorAction Stop }
-        catch { Log "Error deleting existing file '$destination': $($_.Exception.Message)" }
-    } 
-    else { [System.IO.Directory]::CreateDirectory([System.IO.Path]::GetDirectoryName($destination)) | Out-Null }
-    write-host "destination = $destination"
+    if (Test-Path $destination) { try { Remove-Item -Path $destination -Force -ErrorAction Stop } catch { Log "Error deleting existing file '$destination': $($_.Exception.Message)" } } 
+    elseif ([System.IO.Path]::GetDirectoryName($destination)) { [System.IO.Directory]::CreateDirectory([System.IO.Path]::GetDirectoryName($destination)) | Out-Null }
     $httpClient = [System.Net.Http.HttpClient]::new()
     $inputStream = $outputStream = $null
     $progressSymbol = "-"
@@ -145,6 +139,7 @@ foreach ($file in $module_files) { Test-FileUpToDate $("https://github.com/Freen
 
 
 
+
 # =================== CONNECT NATIVE MESSAGING WITH CHROME ===================
 Log "Creating registry keys in HKCU\Software\Google\Chrome\NativeMessagingHosts\$nativeMessagerName..."
 try {
@@ -179,10 +174,15 @@ $extensionPath = Join-Path -Path $latestChromeProfilePath -ChildPath "Extensions
 
 
 # ====================== OPTIONNAL MANUAL INSTALLATION =======================
-if (Test-Path $extensionPath) { Log  "Extension found for recent profile : '$latestChromeProfilePath'" }
+if (Test-Path $extensionPath) { 
+    Log  "Extension found for recent profile : '$latestChromeProfilePath'"
+    # Cleaning previous unpacked extension files
+    foreach ($file in $extension_files) { Remove-Item -Path "$installPath\$file" -Force -ErrorAction SilentlyContinue }
+    Remove-Item -Path "$installPath\icons" -Force  -Recurse -ErrorAction SilentlyContinue
+}
 else {
     Write-Host "" ; Log "Warning: Extension not found for this profile."
-    $userInput = Read-Host " Press Enter to open the extension webpage, or type 'manual' to install the unpacked version" -ForegroundColor Yellow ; Write-Host ""
+    $userInput = Read-Host " Press Enter to open the extension webpage, or type 'manual' to install the unpacked version" ; Write-Host ""
     if ($userInput -eq "manual") {
         Log "Installing unpacked version..."
         foreach ($file in $extension_files) { 
@@ -249,7 +249,7 @@ else {
                 try {
                     $jsonObject = Get-Content -Path "$installPath\$File_ModuleManifest" -Raw | ConvertFrom-Json
                     $jsonObject.name = $nativeMessagerName
-                    $jsonObject.path = "$installPath\$File_ModuleManifest"
+                    $jsonObject.path = "$installPath\freenitial_yt_dlp_wrapper.bat"
                     $jsonObject.allowed_origins = @("chrome-extension://$foundExtensionId/")
                     $jsonObject | ConvertTo-Json | Out-File -FilePath "$installPath\$File_ModuleManifest" -Encoding UTF8
                     Log "Manifest file updated successfully."
@@ -271,9 +271,9 @@ else {
 # ======================= DOWNLOAD AND EXTRACT YT-DLP ========================
 Test-FileUpToDate "https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp.exe" | Out-Null
 
-
 $ffmpegZIPname = "ffmpeg-master-latest-win64-lgpl.zip"
-if (-not (Test-FileUpToDate "https://github.com/BtbN/FFmpeg-Builds/releases/latest/download/$ffmpegZIPname" | Out-Null)) {
+$zipExist = Test-FileUpToDate "https://github.com/BtbN/FFmpeg-Builds/releases/latest/download/$ffmpegZIPname"
+if (-not ($zipExist)) {
     Log "Extracting .exe files..."
     try     {
         $zip = [System.IO.Compression.ZipFile]::OpenRead("$installPath\$ffmpegZIPname")
