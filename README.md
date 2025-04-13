@@ -33,8 +33,7 @@ Add controls to Videos for supported websites :
 
 ## Installation
 
-### From webstore (not yet published) :
-https://chromewebstore.google.com/detail/Video-Download-Reel-ProgressBar-for-Youtube-Facebook-Instagram-TikTok-X/hipgpgddfihbabbeomabnkakidlmaean
+### From webstore : Currently pending approval from Google
 
 In this case, you will be prompted to download setup_any_scenario.bat the first time you use the extension
 
