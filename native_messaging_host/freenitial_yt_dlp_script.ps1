@@ -10,9 +10,7 @@ function Remove-OldFiles {
     $files = Get-ChildItem -Path $Path -Filter $Pattern | Sort-Object LastWriteTime 
     if ($files.Count -gt $MaxCount) { 
         $filesToDelete = $files | Select-Object -First ($files.Count - $MaxCount) 
-        foreach ($file in $filesToDelete) { 
-            Remove-Item $file.FullName -Force 
-        } 
+        foreach ($file in $filesToDelete) { Remove-Item $file.FullName -Force } 
     } 
 } 
  
@@ -72,31 +70,53 @@ try {
     else { throw "No valid parameter provided." }
 } 
 catch { 
-    Log "Input read error: $_" 
-    Send-NativeMessage @{ success = $false; message = "Input error: $_" } 
+    Log "Error input read : $_" 
+    Send-NativeMessage @{ success = $false; message = "Error input : $_" } 
     exit 
 }
 
 
 #--------------------------
-# Auto-update Check
+# Updates Checks
 #--------------------------
-$release = Invoke-RestMethod "https://api.github.com/repos/Freenitial/Videos_Download_Reel_Progress_Bar/releases/latest" | Out-Null
-$asset = $release.assets | Where-Object { $_.name -eq "freenitial_yt_dlp_script.ps1" }
-$onlineDate = [datetime]$asset.updated_at
-$localDate = (Get-Item $localPath).LastWriteTime.ToUniversalTime()
-if ($onlineDate -gt $localDate -and -not (Test-Path $tempFile)) {
-    Invoke-WebRequest "https://github.com/Freenitial/Videos_Download_Reel_Progress_Bar/releases/download/v1.0/freenitial_yt_dlp_script.ps1" -OutFile $localPath | Out-Null
-    Start-Sleep -Seconds 1
-    $tempFile = Join-Path $PSScriptRoot "native_input.tmp"
-    [System.IO.File]::WriteAllBytes($tempFile, $storedInput)
-    cmd.exe /c "type `"$tempFile`" | powershell -nologo -noprofile -executionpolicy bypass -WindowStyle Hidden -File `"$localPath`"" >$null 2>&1
-    # Remove-Item $tempFile -Force
-    exit
+$lastUpdateFile = Join-Path $basePath "lastupdate.txt"
+if (Test-Path $lastUpdateFile) {
+    $elapsedHours = (Get-Date) - (Get-Item $lastUpdateFile).LastWriteTime
+    if ($elapsedHours.TotalHours -ge 4) { Log "Last update was over 4 hours ago ($([math]::Round($elapsedHours.TotalHours,2)) hours elapsed). Update needed." }
+    else { Log "Last update was within 4 hours ($([math]::Round($elapsedHours.TotalHours,2)) hours elapsed). No update needed." }
+}
+else {
+    Log "lastupdate.txt not found. Update needed." 
+    # YT-DLP
+    try {
+        Log "Self updating yt-dlp"
+        $updateArgs = @("--update")
+        $updateProcess = Start-Process -FilePath $ytDlpPathEXE -ArgumentList $updateArgs -WindowStyle Hidden -Wait -PassThru
+        Log "yt-dlp self-update attempted. ExitCode: $($updateProcess.ExitCode)"
+    } 
+    catch { Log "yt-dlp self-update failed : $_" }
+    # PS1
+    try {
+        $release = Invoke-RestMethod "https://api.github.com/repos/Freenitial/Videos_Download_Reel_Progress_Bar/releases/latest"
+        $asset = $release.assets | Where-Object { $_.name -eq "freenitial_yt_dlp_script.ps1" }
+        $onlineDate = [datetime]$asset.updated_at
+        $localDate = (Get-Item $localPath).LastWriteTime.ToUniversalTime()
+        if ($onlineDate -gt $localDate) {
+            Log "Self updating PS1"
+            $tempNewScript = Join-Path $env:TEMP "updated_script.ps1"
+            Invoke-WebRequest "https://github.com/Freenitial/Videos_Download_Reel_Progress_Bar/releases/download/v1.0/freenitial_yt_dlp_script.ps1" -OutFile $tempNewScript | Out-Null
+            Start-Sleep -Seconds 1
+            Copy-Item -Path $tempNewScript -Destination $localPath -Force | Out-Null
+            Log "PS1 update end, relaunching"
+            Start-Process -FilePath "powershell.exe" -ArgumentList "-nologo -noprofile -executionpolicy bypass -WindowStyle Hidden -File `"$localPath`""
+            Exit
+        } 
+        else { Log "No PS1 update needed"}
+    } 
+    catch { Log "Error while updating yt-dlp: $_" }  # github API can be rate-limited
 }
 
 
- 
 #-------------------------- 
 # Process According to Scenario (Download, Show in explorer, Copy in clipboard)
 #-------------------------- 
@@ -118,7 +138,8 @@ if ($inputData.URL) {
             Send-NativeMessage @{ success = $false; message = "Invalid download path: $downloadDir" } 
             exit 
         } 
-    } else { $downloadDir = Join-Path $env:userprofile "Downloads" }
+    } 
+    else { $downloadDir = Join-Path $env:userprofile "Downloads" }
 
     if ($inputData.isGIF) { $tempFilePath = Join-Path $downloadDir "$uuid.gif" }
     elseif ($inputData.mp3) { $tempFilePath = Join-Path $downloadDir "$uuid.mp3" }
@@ -143,22 +164,12 @@ if ($inputData.URL) {
                 Log "Title retrieval job completed successfully"
                 $jobResult = (Receive-Job -Job $job_title 2>&1 | Out-String).Trim()
                 Log "Job result: $jobResult"
-                if ([string]::IsNullOrWhiteSpace($jobResult)) { 
-                    $tempTitle = $uuid
-                    Log "Job returned null or empty title, using UUID as tempTitle: $tempTitle"
-                } else { 
-                    $tempTitle = $jobResult.Trim()
-                    Log "Job returned valid title: $tempTitle"
-                }
-            } else {
-                Stop-Job -Job $job_title -Force 2>&1 | Out-Null
-                Log "Job did not complete in time, stopped forcefully. Using UUID as tempTitle"
-                $tempTitle = $uuid
-            }
-            if ($tempTitle -eq $uuid) { 
-                $sanitized_title = $uuid.Substring(0,17)
-                Log "Using UUID as sanitized title: $sanitized_title"
-            } else {
+                if ([string]::IsNullOrWhiteSpace($jobResult)) { $tempTitle = $uuid ; Log "Job returned null or empty title, using UUID as tempTitle: $tempTitle" }
+                else { $tempTitle = $jobResult.Trim() ; Log "Job returned valid title: $tempTitle" }
+            } 
+            else { Stop-Job -Job $job_title -Force 2>&1 | Out-Null ; Log "Job did not complete in time, stopped forcefully. Using UUID as tempTitle" ; $tempTitle = $uuid }
+            if ($tempTitle -eq $uuid) { $sanitized_title = $uuid.Substring(0,17) ; Log "Using UUID as sanitized title: $sanitized_title" }
+            else {
                 $sanitized_title = $tempTitle.Trim()
                 $sanitized_title = [regex]::Replace($sanitized_title, '[^\p{L}\p{N}\s-]', '')
                 if ($sanitized_title.Length -gt 35) { $sanitized_title = $sanitized_title.Substring(0,35).Trim() ; Log "Sanitized title truncated to 35 characters: $sanitized_title" }
@@ -190,15 +201,18 @@ if ($inputData.URL) {
                 catch { Log "Failed to copy file at end" }
             }
             Send-NativeMessage @{ success = $true; finalPath = $newFile.FullName }
+            
             if ($inputData.bipAtEnd) {
                 try { (New-Object Media.SoundPlayer "C:\Windows\Media\notify.wav").PlaySync() ; Log "Bip sound played" } 
                 catch { Log "Failed to play bip sound 'C:\Windows\Media\notify.wav'" }
             }
-        } else {
+        } 
+        else {
             Log "yt-dlp failed with exit code $($process.ExitCode)."
             Send-NativeMessage @{ success = $false; message = "yt-dlp failed with exit code $($process.ExitCode)." }
         }
-    } catch {
+    } 
+    catch {
         Log "Error executing yt-dlp: $_"
         Send-NativeMessage @{ success = $false; message = "Error executing yt-dlp: $_" }
     }
@@ -233,8 +247,7 @@ elseif ($inputData.SHOW) {
             $shell = New-Object -ComObject Shell.Application
             $windows = $shell.Windows()
             foreach ($window in $windows) {
-                $currentWindowComObject = $window
-                $releaseCurrentWindow = $true
+                $currentWindowComObject = $window ; $releaseCurrentWindow = $true
                 try {
                     if (($window.FullName -like "*explorer.exe*") -and ($null -ne $window.Document) -and ($null -ne $window.Document.Folder)) {
                         try {
@@ -245,7 +258,8 @@ elseif ($inputData.SHOW) {
                                 $releaseCurrentWindow = $false
                                 break
                             }
-                        } catch { Log "ERROR resolving path for HWND $($window.HWND): $($_.Exception.Message)" }
+                        } 
+                        catch { Log "ERROR resolving path for HWND $($window.HWND): $($_.Exception.Message)" }
                     }
                 } 
                 catch { Log "ERROR accessing properties for HWND $($window.HWND): $($_.Exception.Message)" }
@@ -288,41 +302,48 @@ elseif ($inputData.SHOW) {
                                     break
                                 }
                             } 
-                            catch { Log "Warning: Error accessing items during poll: $($_.Exception.Message)" }
+                            catch { Log "Warning: cannot access items during poll: $($_.Exception.Message)" }
                             finally { if ($null -ne $items -and [System.Runtime.InteropServices.Marshal]::IsComObject($items)) { [System.Runtime.InteropServices.Marshal]::ReleaseComObject($items) | Out-Null } }
                             Start-Sleep -Milliseconds $waitTimeMs
                         }
                         $stopWatch.Stop()
                         if (-not $itemFoundInView) { Log "Warning: File not seen in view after F5/$timeoutSeconds sec timeout." }
-                    } catch { Log "Warning: Error sending F5 or polling: $($_.Exception.Message)" }
+                    } 
+                    catch { Log "Warning: Cannot send F5 or polling: $($_.Exception.Message)" }
                     try {
                         $foundWindowObject.Document.SelectItem($fileToShow, 0x0D) # 0x0D = Select+EnsureVisible+DeselectOthers
                         Send-NativeMessage @{ success = $true; message = "Activated, refreshed (F5), selected via COM: $fileToShow" }
-                    } catch {
+                    } 
+                    catch {
                          Log "ERROR using COM SelectItem after F5: $($_.Exception.Message). Falling back."
                          explorer.exe /select,"$fileToShow"
                          Send-NativeMessage @{ success = $false; message = "Activated/refreshed (F5), COM select failed. Fallback used. File: $fileToShow. Error: $($_.Exception.Message)" }
                     }
-                } else {
+                } 
+                else {
                     Log "SetForegroundWindow failed. Falling back."
                     explorer.exe /select,"$fileToShow"
                     Send-NativeMessage @{ success = false; message = "Failed to set foreground window. Fallback used: $fileToShow" }
                 }
-            } catch {
+            } 
+            catch {
                 Log "ERROR during activation/refresh/select: $($_.Exception.Message). Falling back."
                 explorer.exe /select,"$fileToShow"
                 Send-NativeMessage @{ success = false; message = "Error activating/refreshing/selecting. Fallback used. File: $fileToShow. Error: $($_.Exception.Message)" }
-            } finally {
+            } 
+            finally {
                 if ($null -ne $foundWindowObject -and [System.Runtime.InteropServices.Marshal]::IsComObject($foundWindowObject)) { [System.Runtime.InteropServices.Marshal]::ReleaseComObject($foundWindowObject) | Out-Null }
                 [System.GC]::Collect()
                 [System.GC]::WaitForPendingFinalizers()
             }
-        } else {
+        } 
+        else {
             Log "No matching window found. Using default explorer.exe /select."
             explorer.exe /select,"$fileToShow"
             Send-NativeMessage @{ success = $true; message = "File showed (default behavior): $fileToShow" }
         }
-    } catch {
+    } 
+    catch {
         Log "FATAL Error showing file: $_"
         Send-NativeMessage @{ success = $false; message = "Error showing file: $_" }
     }
