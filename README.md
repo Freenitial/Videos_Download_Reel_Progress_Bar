@@ -26,7 +26,6 @@ Add controls to Videos for supported websites :
 
 ## Requirements : 
 - Windows 10 build 1703 +
-- Powershell 5.1 +
 - Google Chrome
 
 ---
