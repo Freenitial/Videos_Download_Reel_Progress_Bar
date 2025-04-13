@@ -31,10 +31,12 @@ Add controls to Videos for supported websites :
 
 ---
 
-## Installation steps
+## Installation
 
-### 1) Install from Chrome WebStore : 
+### From webstore (not yet published) :
 https://chromewebstore.google.com/detail/Video-Download-Reel-ProgressBar-for-Youtube-Facebook-Instagram-TikTok-X/hipgpgddfihbabbeomabnkakidlmaean
 
-### 2) Then install module for yt-dlp :
+## OR
+
+### Manual unpacked installation :
 https://github.com/Freenitial/Videos_Download_Reel_Progress_Bar/releases/latest/download/setup_nativeMessaging.bat
