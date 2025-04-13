@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Videos Download - Reel Progress Bar - for Youtube Facebook Instagram TikTok Twitter X",
-  "version": "1.0",
+  "version": "1.1",
   "description": "Works only on Windows 10+ using Chrome browser",
   "icons": {
     "16": "icons/icon-16.png",
