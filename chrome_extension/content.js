@@ -106,7 +106,7 @@ const showNotification = (message, isSuccess = true, duration = 2500, finalPath 
 
     // Copy Button
     const copyButton = document.createElement('button');
-    copyButton.textContent = 'Copy Path';
+    copyButton.textContent = 'Copy File';
     Object.assign(copyButton.style, buttonBaseStyle);
     copyButton.addEventListener('mouseover', () => copyButton.style.backgroundColor = 'rgba(230, 230, 230, 0.85)');
     copyButton.addEventListener('mouseout', () => copyButton.style.backgroundColor = 'rgba(255, 255, 255, 0.85)');
@@ -128,7 +128,7 @@ const showNotification = (message, isSuccess = true, duration = 2500, finalPath 
         // Reset button state after a short delay
         setTimeout(() => {
           if (copyButton.isConnected) { // Check if button still exists
-            copyButton.textContent = 'Copy Path';
+            copyButton.textContent = 'Copy File';
             copyButton.disabled = false;
               copyButton.style.backgroundColor = 'rgba(255, 255, 255, 0.85)';
           }
