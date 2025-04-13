@@ -4,6 +4,7 @@
 #>
 
 
+
 Add-Type -AssemblyName System.IO.Compression.FileSystem
 Add-Type -AssemblyName System.Net.Http
 
@@ -25,7 +26,6 @@ if (-not (Test-Path $installPath)) {
     catch { Write-Host "Error: Failed to create folder '$installPath'" -ForegroundColor "Red" ; $null = $Host.UI.RawUI.ReadKey("NoEcho,IncludeKeyDown") ; exit 2 }
 }
 Set-Location $installPath
-
 
 
 
@@ -132,10 +132,8 @@ function Invoke-Download {
 
 
 
-
 # ================= DOWNLOAD NATIVE MESSAGING MANIFEST FILE ==================
 foreach ($file in $module_files) { Test-FileUpToDate $("https://github.com/Freenitial/Videos_Download_Reel_Progress_Bar/releases/latest/download/$file") | Out-Null }
-
 
 
 
@@ -148,7 +146,6 @@ try {
     Set-ItemProperty -Path "HKCU:\Software\Google\Chrome\NativeMessagingHosts\$nativeMessagerName" -Name '(default)' -Value "$installPath\$File_ModuleManifest" -ErrorAction Stop
 } 
 catch { Log "Error: Failed to create registry keys for native messaging." }
-
 
 
 
@@ -169,7 +166,6 @@ if (Test-Path $chromeAppdataPath) {
     } | Sort-Object MaxTime -Descending | Select-Object -First 1).Path
 }
 $extensionPath = Join-Path -Path $latestChromeProfilePath -ChildPath "Extensions\$extension_ID"
-
 
 
 
@@ -231,13 +227,19 @@ else {
             if ($json -and $json.extensions -and $json.extensions.settings) {
                 Log "Searching for extension path in settings..."
                 try {
-                    foreach ($id in $json.extensions.settings.PSObject.Properties.Name) {
-                        $ext = $json.extensions.settings.$id
-                        if ($ext.path -eq $pathToFind) {
-                            $foundExtensionId = $id
-                            Log "Extension ID '$foundExtensionId' found for path '$pathToFind'."
-                            break 
+                    $timeoutSeconds = 15
+                    $foundExtensionId = $null
+                    for ($i = 0; $i -lt $timeoutSeconds; $i++) {
+                        foreach ($id in $json.extensions.settings.PSObject.Properties.Name) {
+                            $ext = $json.extensions.settings.$id
+                            if ($ext.path -eq $pathToFind) {
+                                $foundExtensionId = $id
+                                Log "Extension ID '$foundExtensionId' found for path '$pathToFind'."
+                                break
+                            }
                         }
+                        if ($foundExtensionId) { break }
+                        Start-Sleep -Seconds 1
                     }
                     if (-not $foundExtensionId) { Log "Error: Extension path '$pathToFind' not found in secure preferences." }
                 } 
@@ -267,7 +269,6 @@ else {
 
 
 
-
 # ======================= DOWNLOAD AND EXTRACT YT-DLP ========================
 Test-FileUpToDate "https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp.exe" | Out-Null
 
@@ -286,7 +287,6 @@ if (-not ($zipExist)) {
     catch   { Log "Error processing ZIP file '$ffmpegZIPname': $($_.Exception.Message)" }
     finally { if ($null -ne $zip) { $zip.Dispose() ; Log "ZIP archive handle released." } }
 }
-
 
 
 
