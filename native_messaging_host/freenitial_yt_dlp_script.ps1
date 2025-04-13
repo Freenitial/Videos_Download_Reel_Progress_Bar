@@ -50,30 +50,34 @@ $scriptLogFile  = Join-Path $logsDirectory "script-ps1_$currentDate.log"
 if (Test-Path $scriptLogFile) { Add-Content -Path $scriptLogFile -Value "`n--------`n" } 
 
 
-#-------------------------- 
+#--------------------------
 # Reading Standard Input 
-#-------------------------- 
-try { 
-    $stdin = [Console]::OpenStandardInput() 
-    $lengthBytes = New-Object byte[] 4 
-    if ($stdin.Read($lengthBytes, 0, 4) -ne 4) { throw "Invalid length header" } 
-     
-    $messageLength = [System.BitConverter]::ToInt32($lengthBytes, 0) 
-    $inputBytes = New-Object byte[] $messageLength 
-    $stdin.Read($inputBytes, 0, $messageLength) | Out-Null 
-    $inputJson = [System.Text.Encoding]::UTF8.GetString($inputBytes) 
-    $inputData = $inputJson | ConvertFrom-Json 
-     
-    if ($inputData.URL) { $url = $inputData.URL ; Log "Input URL = $url" }
-    elseif ($inputData.SHOW) { $fileToShow = $inputData.SHOW ; Log "File to show = $fileToShow" }
-    elseif ($inputData.COPY) { $fileToCopy = $inputData.COPY ; Log "File to copy = $fileToCopy" }
-    else { throw "No valid parameter provided." }
-} 
-catch { 
-    Log "Error input read : $_" 
-    Send-NativeMessage @{ success = $false; message = "Error input : $_" } 
-    exit 
+#--------------------------
+if ($args.Count -gt 0 -and (Test-Path $args[0])) {
+    $inputData = Get-Content -Path $args[0] -Raw | ConvertFrom-Json
+    Remove-Item -Path $args[0] -Force
 }
+else {
+    try { 
+        $stdin = [Console]::OpenStandardInput() 
+        $lengthBytes = New-Object byte[] 4 
+        if ($stdin.Read($lengthBytes, 0, 4) -ne 4) { throw "Invalid length header" } 
+        $messageLength = [System.BitConverter]::ToInt32($lengthBytes, 0) 
+        $inputBytes = New-Object byte[] $messageLength 
+        $stdin.Read($inputBytes, 0, $messageLength) | Out-Null 
+        $inputJson = [System.Text.Encoding]::UTF8.GetString($inputBytes) 
+        $inputData = $inputJson | ConvertFrom-Json
+    } 
+    catch { 
+        Log "Error input read : $_" 
+        Send-NativeMessage @{ success = $false; message = "Error input : $_" } 
+        exit 
+    }
+}
+if ($inputData.URL) { $url = $inputData.URL; Log "Input URL = $url" }
+elseif ($inputData.SHOW) { $fileToShow = $inputData.SHOW; Log "File to show = $fileToShow" }
+elseif ($inputData.COPY) { $fileToCopy = $inputData.COPY; Log "File to copy = $fileToCopy" }
+else { throw "No valid parameter provided." }
 
 
 #--------------------------
@@ -86,7 +90,9 @@ if (Test-Path $lastUpdateFile) {
     else { Log "Last update was within 4 hours ($([math]::Round($elapsedHours.TotalHours,2)) hours elapsed). No update needed." }
 }
 else {
-    Log "lastupdate.txt not found. Update needed." 
+    Log "lastupdate.txt not found. Update needed."
+    Set-Content -Path $lastUpdateFile -Value $(Get-Date) -Encoding UTF8
+    Log "Updated lastupdate.txt"
     # YT-DLP
     try {
         Log "Self updating yt-dlp"
@@ -103,17 +109,19 @@ else {
         $localDate = (Get-Item $localPath).LastWriteTime.ToUniversalTime()
         if ($onlineDate -gt $localDate) {
             Log "Self updating PS1"
-            $tempNewScript = Join-Path $env:TEMP "updated_script.ps1"
-            Invoke-WebRequest "https://github.com/Freenitial/Videos_Download_Reel_Progress_Bar/releases/download/v1.0/freenitial_yt_dlp_script.ps1" -OutFile $tempNewScript | Out-Null
+            $tempNewScript = "temp_updated_script.ps1"
+            Invoke-WebRequest "https://github.com/Freenitial/Videos_Download_Reel_Progress_Bar/releases/latest/download/freenitial_yt_dlp_script.ps1" -OutFile $tempNewScript
             Start-Sleep -Seconds 1
+            $tempNativeMessage = "temp_native_message.json"
+            $inputData | ConvertTo-Json -Compress | Out-File -FilePath $tempNativeMessage -Encoding UTF8
             Copy-Item -Path $tempNewScript -Destination $localPath -Force | Out-Null
-            Log "PS1 update end, relaunching"
-            Start-Process -FilePath "powershell.exe" -ArgumentList "-nologo -noprofile -executionpolicy bypass -WindowStyle Hidden -File `"$localPath`""
+            Log "PS1 update end, relaunching with saved native message from $tempNativeMessage"
+            & "$localPath" "$tempNativeMessage"
             Exit
         } 
-        else { Log "No PS1 update needed"}
-    } 
-    catch { Log "Error while updating yt-dlp: $_" }  # github API can be rate-limited
+        else { Log "No PS1 update needed" }
+    }
+    catch { Log "Error while updating PS1: $_" }
 }
 
 
@@ -201,7 +209,6 @@ if ($inputData.URL) {
                 catch { Log "Failed to copy file at end" }
             }
             Send-NativeMessage @{ success = $true; finalPath = $newFile.FullName }
-            
             if ($inputData.bipAtEnd) {
                 try { (New-Object Media.SoundPlayer "C:\Windows\Media\notify.wav").PlaySync() ; Log "Bip sound played" } 
                 catch { Log "Failed to play bip sound 'C:\Windows\Media\notify.wav'" }
