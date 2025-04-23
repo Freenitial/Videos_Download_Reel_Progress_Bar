@@ -12,10 +12,9 @@ Add-Type -AssemblyName System.Net.Http
 $host.UI.RawUI.WindowTitle = "Freential Videos Download Module Setup V1.1"
 Write-Host ""
 
-$nativeMessagerName = "freenitial_yt_dlp_host"
+$nativeMessagerName  = "freenitial_yt_dlp_host"
 $File_ModuleManifest = "$nativeMessagerName.json"
-$installPath        = "$env:programdata\Videos Download - Reel Progress Bar"
-$extension_ID       = "hipgpgddfihbabbeomabnkakidlmaean"
+$installPath         = "$env:programdata\Videos Download - Reel Progress Bar"
 $logFile = Join-Path (Get-Location) "setup_nativeMessaging.log"
 
 $module_files = @("$File_ModuleManifest", "freenitial_yt_dlp_wrapper.bat", "freenitial_yt_dlp_script.ps1")
