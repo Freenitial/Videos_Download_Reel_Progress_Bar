@@ -38,5 +38,3 @@ Add controls to Videos for supported websites :
 
 ### Manual unpacked installation :
 https://github.com/Freenitial/Videos_Download_Reel_Progress_Bar/releases/latest/download/setup.bat
-
-When downloading this file without first installing from the Chrome Webstore, you'll be able to install it manually unpacked
