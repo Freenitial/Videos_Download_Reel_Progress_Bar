@@ -32,7 +32,7 @@ Add controls to Videos for supported websites :
 
 ## Installation
 
-### From webstore : NO ! Google does not approve this extension
+### From webstore : NO ! Google did not approve this extension
 
 ## OR
 
