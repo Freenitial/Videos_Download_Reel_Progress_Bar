@@ -34,7 +34,5 @@ Add controls to Videos for supported websites :
 
 ### From webstore : NO ! Google did not approve this extension
 
-## OR
-
 ### Manual unpacked installation :
 https://github.com/Freenitial/Videos_Download_Reel_Progress_Bar/releases/latest/download/setup.bat
