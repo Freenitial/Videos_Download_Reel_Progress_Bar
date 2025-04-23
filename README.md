@@ -32,13 +32,11 @@ Add controls to Videos for supported websites :
 
 ## Installation
 
-### From webstore : Currently pending approval from Google
-
-In this case, you will be prompted to download setup_any_scenario.bat the first time you use the extension
+### From webstore : NO ! Google does not approve this extension
 
 ## OR
 
 ### Manual unpacked installation :
-https://github.com/Freenitial/Videos_Download_Reel_Progress_Bar/releases/latest/download/setup_any_scenario.bat
+https://github.com/Freenitial/Videos_Download_Reel_Progress_Bar/releases/latest/download/setup.bat
 
 When downloading this file without first installing from the Chrome Webstore, you'll be able to install it manually unpacked
