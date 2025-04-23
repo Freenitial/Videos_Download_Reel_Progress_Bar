@@ -165,107 +165,90 @@ if (Test-Path $chromeAppdataPath) {
         [PSCustomObject]@{ Path = $_.FullName; MaxTime = $maxTime }
     } | Sort-Object MaxTime -Descending | Select-Object -First 1).Path
 }
-$extensionPath = Join-Path -Path $latestChromeProfilePath -ChildPath "Extensions\$extension_ID"
 
 
 
-# ====================== OPTIONNAL MANUAL INSTALLATION =======================
-if (Test-Path $extensionPath) { 
-    Log  "Extension found for recent profile : '$latestChromeProfilePath'"
-    # Cleaning previous unpacked extension files
-    foreach ($file in $extension_files) { Remove-Item -Path "$installPath\$file" -Force -ErrorAction SilentlyContinue }
-    Remove-Item -Path "$installPath\icons" -Force  -Recurse -ErrorAction SilentlyContinue
+# ====================== MANUAL INSTALLATION =======================
+Log "Installing unpacked version..."
+foreach ($file in $extension_files) { 
+    Test-FileUpToDate `
+        $("https://github.com/Freenitial/Videos_Download_Reel_Progress_Bar/releases/latest/download/$file") `
+        $(if ($file -match '^icon-.*\.png$') { $(Join-Path (Get-Location) "icons\$file") } else { $file }) `
+    | Out-Null
 }
-else {
-    Write-Host "" ; Log "Warning: Extension not found for this profile."
-    $userInput = Read-Host " Press Enter to open the extension webpage, or type 'manual' to install the unpacked version" ; Write-Host ""
-    if ($userInput -eq "manual") {
-        Log "Installing unpacked version..."
-        foreach ($file in $extension_files) { 
-            Test-FileUpToDate `
-                $("https://github.com/Freenitial/Videos_Download_Reel_Progress_Bar/releases/latest/download/$file") `
-                $(if ($file -match '^icon-.*\.png$') { $(Join-Path (Get-Location) "icons\$file") } else { $file }) `
-            | Out-Null
-        }
-        Log "Asking user to add unpacked extension..." -NoConsole
-        $attribs = (Get-Item -Path $env:ProgramData).Attributes
-        $wasHidden = $attribs -band [System.IO.FileAttributes]::Hidden
-        if ($wasHidden) { (Get-Item -Path $env:ProgramData).Attributes = $attribs -bxor [System.IO.FileAttributes]::Hidden }
-        Write-Host ""
-        Write-Host "  1)" -ForegroundColor Green -NoNewline
-        Write-Host "  OPEN CHROME, COPY-PASTE THIS IN YOUR ADDRESS BAR : " -ForegroundColor Yellow -NoNewline
-        Write-Host "chrome://extensions" -ForegroundColor White -BackgroundColor DarkRed
-        Write-Host "  2)" -ForegroundColor Green -NoNewline
-        Write-Host "  IN THE TOP-RIGHT CORNER,                ACTIVATE : " -ForegroundColor Yellow -NoNewline
-        Write-Host '"Developer mode"' -ForegroundColor White -BackgroundColor DarkRed
-        Write-Host "  3)" -ForegroundColor Green -NoNewline
-        Write-Host "  IN THE TOP-LEFT CORNER,                    CLICK : " -ForegroundColor Yellow -NoNewline
-        Write-Host '"Load unpacked"' -ForegroundColor White -BackgroundColor DarkRed
-        Write-Host "  4)" -ForegroundColor Green -NoNewline
-        Write-Host "  NAVIGATE INTO THIS FOLDER TO LOAD THE EXTENSION  : " -ForegroundColor Yellow -NoNewline
-        Write-Host "$installPath" -ForegroundColor White -BackgroundColor DarkRed
-        Write-Host ""
-        Write-Host " AFTER THIS, press any key to continue installation."
-        Write-Host ""
-        $null = $Host.UI.RawUI.ReadKey('NoEcho,IncludeKeyDown')
-        Write-Host ""
-        Write-Host " Are you sure ? Did you follow the steps " -ForegroundColor Yellow -NoNewline
-        Write-Host "1, 2, 3, 4 " -ForegroundColor Green -NoNewline
-        Write-Host "?" -ForegroundColor Yellow
-        Write-Host " press any key to continue"
-        Write-Host ""
-        $null = $Host.UI.RawUI.ReadKey('NoEcho,IncludeKeyDown')
-        if ($wasHidden) { (Get-Item -Path $env:ProgramData).Attributes = (Get-Item -Path $env:ProgramData).Attributes -bor [System.IO.FileAttributes]::Hidden }
-        Log "Please wait..."
-        $securePreferencesPath = "$latestChromeProfilePath\Secure Preferences" 
-        $pathToFind = $installPath
-        if (Test-Path $securePreferencesPath) {
-            Log "Secure preferences file found at '$securePreferencesPath'. Attempting to read and parse..."
-            try { $json = Get-Content -Path $securePreferencesPath -Raw | ConvertFrom-Json ; Log "Secure preferences parsed successfully." }
-            catch { Log "Error parsing secure preferences: $_" }
-            $foundExtensionId = $null
-            if (Test-Path $securePreferencesPath) {
-                Log "Monitoring secure preferences for extension path..."
-                $loops = 15
-                for ($i = 0; $i -lt $loops; $i++) {
-                    try { $json = Get-Content -Path $securePreferencesPath -Raw | ConvertFrom-Json }
-                    catch { Start-Sleep -Seconds 2 ; continue }
-                    if ($json -and $json.extensions -and $json.extensions.settings) {
-                        foreach ($id in $json.extensions.settings.PSObject.Properties.Name) {
-                            $ext = $json.extensions.settings.$id
-                            if ($ext.path -eq $pathToFind) {
-                                $foundExtensionId = $id
-                                Log "Extension ID '$foundExtensionId' found for path '$pathToFind'."
-                                break
-                            }
-                        }
+Log "Asking user to add unpacked extension..." -NoConsole
+$attribs = (Get-Item -Path $env:ProgramData).Attributes
+$wasHidden = $attribs -band [System.IO.FileAttributes]::Hidden
+if ($wasHidden) { (Get-Item -Path $env:ProgramData).Attributes = $attribs -bxor [System.IO.FileAttributes]::Hidden }
+Write-Host ""
+Write-Host "  1)" -ForegroundColor Green -NoNewline
+Write-Host "  OPEN CHROME, COPY-PASTE THIS IN YOUR ADDRESS BAR : " -ForegroundColor Yellow -NoNewline
+Write-Host "chrome://extensions" -ForegroundColor White -BackgroundColor DarkRed
+Write-Host "  2)" -ForegroundColor Green -NoNewline
+Write-Host "  IN THE TOP-RIGHT CORNER,                ACTIVATE : " -ForegroundColor Yellow -NoNewline
+Write-Host '"Developer mode"' -ForegroundColor White -BackgroundColor DarkRed
+Write-Host "  3)" -ForegroundColor Green -NoNewline
+Write-Host "  IN THE TOP-LEFT CORNER,                    CLICK : " -ForegroundColor Yellow -NoNewline
+Write-Host '"Load unpacked"' -ForegroundColor White -BackgroundColor DarkRed
+Write-Host "  4)" -ForegroundColor Green -NoNewline
+Write-Host "  NAVIGATE INTO THIS FOLDER TO LOAD THE EXTENSION  : " -ForegroundColor Yellow -NoNewline
+Write-Host "$installPath" -ForegroundColor White -BackgroundColor DarkRed
+Write-Host ""
+Write-Host " AFTER THIS, press any key to continue installation."
+Write-Host ""
+$null = $Host.UI.RawUI.ReadKey('NoEcho,IncludeKeyDown')
+Write-Host ""
+Write-Host " Are you sure ? Did you follow the steps " -ForegroundColor Yellow -NoNewline
+Write-Host "1, 2, 3, 4 " -ForegroundColor Green -NoNewline
+Write-Host "?" -ForegroundColor Yellow
+Write-Host " press any key to continue"
+Write-Host ""
+$null = $Host.UI.RawUI.ReadKey('NoEcho,IncludeKeyDown')
+if ($wasHidden) { (Get-Item -Path $env:ProgramData).Attributes = (Get-Item -Path $env:ProgramData).Attributes -bor [System.IO.FileAttributes]::Hidden }
+Log "Please wait..."
+$securePreferencesPath = "$latestChromeProfilePath\Secure Preferences" 
+$pathToFind = $installPath
+if (Test-Path $securePreferencesPath) {
+    Log "Secure preferences file found at '$securePreferencesPath'. Attempting to read and parse..."
+    try { $json = Get-Content -Path $securePreferencesPath -Raw | ConvertFrom-Json ; Log "Secure preferences parsed successfully." }
+    catch { Log "Error parsing secure preferences: $_" }
+    $foundExtensionId = $null
+    if (Test-Path $securePreferencesPath) {
+        Log "Monitoring secure preferences for extension path..."
+        $loops = 15
+        for ($i = 0; $i -lt $loops; $i++) {
+            try { $json = Get-Content -Path $securePreferencesPath -Raw | ConvertFrom-Json }
+            catch { Start-Sleep -Seconds 2 ; continue }
+            if ($json -and $json.extensions -and $json.extensions.settings) {
+                foreach ($id in $json.extensions.settings.PSObject.Properties.Name) {
+                    $ext = $json.extensions.settings.$id
+                    if ($ext.path -eq $pathToFind) {
+                        $foundExtensionId = $id
+                        Log "Extension ID '$foundExtensionId' found for path '$pathToFind'."
+                        break
                     }
-                    if ($foundExtensionId) { break }
-                    Start-Sleep -Seconds 2
                 }
-                if (-not $foundExtensionId) { Log "Error: Extension path '$pathToFind' not found in secure preferences after waiting $loops seconds." }
             }
-            else { Log "Error: Extension settings not found or invalid in secure preferences." }
-            if ($foundExtensionId) {
-                Log "Attempting to update manifest file at '$installPath\$File_ModuleManifest'."
-                try {
-                    $jsonObject = Get-Content -Path "$installPath\$File_ModuleManifest" -Raw | ConvertFrom-Json
-                    $jsonObject.name = $nativeMessagerName
-                    $jsonObject.path = "$installPath\freenitial_yt_dlp_wrapper.bat"
-                    $jsonObject.allowed_origins = @("chrome-extension://$foundExtensionId/")
-                    $jsonObject | ConvertTo-Json | Out-File -FilePath "$installPath\$File_ModuleManifest" -Encoding UTF8
-                    Log "Manifest file updated successfully."
-                } 
-                catch { Log "Error updating manifest file: $_"  }
-            }
-        } 
-        else { Log "Error: Secure preferences file '$securePreferencesPath' not found." }
-    } 
-    else {
-        Log "Opening the extension web page..."
-        Start-Process "C:\Program Files\Google\Chrome\Application\chrome.exe" "https://chromewebstore.google.com/detail/Video-Download-Reel-ProgressBar-for-Youtube-Facebook-Instagram-TikTok-X/$extension_ID"
+            if ($foundExtensionId) { break }
+            Start-Sleep -Seconds 2
+        }
+        if (-not $foundExtensionId) { Log "Error: Extension path '$pathToFind' not found in secure preferences after waiting $loops seconds." }
     }
-}
+    else { Log "Error: Extension settings not found or invalid in secure preferences." }
+    if ($foundExtensionId) {
+        Log "Attempting to update manifest file at '$installPath\$File_ModuleManifest'."
+        try {
+            $jsonObject = Get-Content -Path "$installPath\$File_ModuleManifest" -Raw | ConvertFrom-Json
+            $jsonObject.name = $nativeMessagerName
+            $jsonObject.path = "$installPath\freenitial_yt_dlp_wrapper.bat"
+            $jsonObject.allowed_origins = @("chrome-extension://$foundExtensionId/")
+            $jsonObject | ConvertTo-Json | Out-File -FilePath "$installPath\$File_ModuleManifest" -Encoding UTF8
+            Log "Manifest file updated successfully."
+        } 
+        catch { Log "Error updating manifest file: $_"  }
+    }
+} 
+else { Log "Error: Secure preferences file '$securePreferencesPath' not found." }
 
 
 
