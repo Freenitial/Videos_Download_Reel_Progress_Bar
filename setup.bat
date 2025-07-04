@@ -1,5 +1,5 @@
 <# ::
-    cls & @echo off & chcp 65001 >nul
+    cls & @echo off
     copy /y "%~f0" "%TEMP%\%~n0.ps1" >NUL && powershell -Nologo -NoProfile -ExecutionPolicy Bypass -File "%TEMP%\%~n0.ps1"
 #>
 
@@ -9,7 +9,7 @@ Add-Type -AssemblyName System.IO.Compression.FileSystem
 Add-Type -AssemblyName System.Net.Http
 
 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
-$host.UI.RawUI.WindowTitle = "Freential Videos Download Module Setup V1.1"
+$host.UI.RawUI.WindowTitle = "Freential Videos Download Module Setup V1.2"
 Write-Host ""
 
 $nativeMessagerName  = "freenitial_yt_dlp_host"
@@ -34,49 +34,74 @@ function Log {
     $isError = $message.ToLower().Contains("error")
     $color = if ($isError) { "Red" } elseif ($message.ToLower().Contains("warning")) { "Yellow" } else { $null }
     if (-not $NoConsole.IsPresent) { if ($color) { Write-Host (" {0}" -f $message) -ForegroundColor $color -NoNewline:$NoNewline } 
-                                     else { Write-Host (" {0}" -f $message) -NoNewline:$NoNewline }
-    }
+                                     else { Write-Host (" {0}" -f $message) -NoNewline:$NoNewline } }
     if (-not $NoNewline) {
         $logMessage = if ([string]::IsNullOrEmpty($message)) { "" } else { "[$('{0:yyyy/MM/dd - HH:mm:ss}' -f (Get-Date))] - $message" }
-        try { Add-Content -Path $logFile -Value $logMessage -ErrorAction Stop }
-        catch { Write-Host "Error writing to logfile: $($_.Exception.Message)"; $null = $Host.UI.RawUI.ReadKey("NoEcho,IncludeKeyDown"); exit 3 }
+        try {
+            $utf8 = New-Object System.Text.UTF8Encoding $false
+            $sw = New-Object System.IO.StreamWriter -ArgumentList $logFile, $true, $utf8
+            $sw.WriteLine($logMessage)
+            $sw.Close()
+        } catch {
+            Write-Host "Error writing to logfile: $($_.Exception.Message)"; $null = $Host.UI.RawUI.ReadKey("NoEcho,IncludeKeyDown"); exit 3
+        }
     }
     if ($isError) { $null = $Host.UI.RawUI.ReadKey("NoEcho,IncludeKeyDown"); exit 2 }
 }
 if (Test-Path $logFile) { Log "" ; Log " --------------------------------" -NoConsole ; Log "" -NoConsole }
 
 
+$WTS = Add-Type -MemberDefinition @'
+    [DllImport("wtsapi32.dll", SetLastError=true)]
+    public static extern IntPtr WTSOpenServer(string pServerName);
+    [DllImport("wtsapi32.dll", SetLastError=true)]
+    public static extern void WTSCloseServer(IntPtr hServer);
+    [DllImport("wtsapi32.dll", SetLastError=true)]
+    public static extern bool WTSSendMessage(IntPtr hServer, int SessionId, String pTitle, int TitleLength, String pMessage, int MessageLength, int Style, int Timeout, out int pResponse, bool bWait);
+'@ -Name WTSApi -Namespace Win32 -PassThru
+$WTShandle = $WTS::WTSOpenServer($give_null_variable_because_its_local)
+
+function Send-WtsMessage {
+    param([string]$Title,[string]$Message,[string]$Style="ok",[int]$TimeoutSeconds=0,[switch]$NoWait)
+    $styleBase=switch($Style.ToLower()){"yesno"{0x4}"ok"{0x0}default{throw"Unsupported style '$Style'. Use 'ok' or 'yesno'."}}
+    $icon=if($Message -like "*?*"){0x20}else{0x40}
+    $finalStyle=$styleBase -bor $icon
+    $response=0
+    [void]$WTS::WTSSendMessage($WTShandle,(Get-Process -Id $PID).SessionId,$Title,$Title.Length,$Message,$Message.Length,$finalStyle,$TimeoutSeconds,[ref]$response,-not $NoWait)
+    if($styleBase -eq 0x0){$null=$response}else{return $response}
+}
+
+
 function Test-FileUpToDate {
     [CmdletBinding()]
     param(
-        [Parameter(Mandatory = $true)]
-        [string]$FileURL,
-        [Parameter(Mandatory = $false)]
-        [string]$FileLocal
+        [Parameter(Mandatory=$true)][string]$FileURL,
+        [Parameter(Mandatory=$false)][string]$FileLocal
     )
     try {
-        $assetName = Split-Path $FileURL -Leaf
-        if (-not $FileLocal) { $FileLocal = Join-Path $(Get-Location) $assetName } 
-        if (-not [System.IO.Path]::GetDirectoryName($FileLocal)) { $FileLocal = Join-Path $(Get-Location) $FileLocal }
-        $uri = [uri]$FileURL
-        $segments = $uri.Segments
-        if ($segments.Count -lt 3) { Log "Error: Invalid GitHub URL format." }
-        $owner = $segments[1].TrimEnd('/')
-        $repo  = $segments[2].TrimEnd('/')
-        $apiURL = "https://api.github.com/repos/$owner/$repo/releases/latest"
-        $release = Invoke-RestMethod -Uri $apiURL
-        $asset = $release.assets | Where-Object { $_.name -eq $assetName }
-        if (-not $asset) { Log "Error: Asset '$assetName' not found in the latest release." }
-        if (-not (Test-Path $FileLocal)) { Log "Local file '$assetName' does not exist." ; Invoke-Download $FileURL $FileLocal ; return $false }
-        $localFile = Get-Item $FileLocal
-        if ($localFile.Length -ne $asset.size) { Log "File size mismatch. Local: $($localFile.Length), Online: $($asset.size)" ; Invoke-Download $FileURL $FileLocal ; return $false }
-        $localDate = $localFile.LastWriteTime
-        $onlineDate = ([datetime]$asset.updated_at).ToLocalTime()
-        if ($localDate -lt $onlineDate) { Log "Local file is older. Local: $localDate, Online: $onlineDate" ; Invoke-Download $FileURL $FileLocal ; return $false }
-        Log "$assetName is up to date"
-        return $true
+        $assetName=Split-Path $FileURL -Leaf
+        if(-not $FileLocal){$FileLocal=Join-Path (Get-Location) $assetName}
+        if(-not[System.IO.Path]::GetDirectoryName($FileLocal)){$FileLocal=Join-Path (Get-Location) $FileLocal}
+        $uri=[uri]$FileURL;$segments=$uri.Segments;if($segments.Count -lt 3){Log "Error: Invalid GitHub URL format."}
+        $owner=$segments[1].TrimEnd('/');$repo=$segments[2].TrimEnd('/')
+        $apiURL="https://api.github.com/repos/$owner/$repo/releases/latest"
+        $release=Invoke-RestMethod -Uri $apiURL -Headers @{'User-Agent'='PS-FileChecker'}
+        $asset=$release.assets|Where-Object{$_.name -eq $assetName}
+        if(-not $asset){Log "Error: Asset '$assetName' not found in the latest release."}
+        if(-not(Test-Path -LiteralPath $FileLocal)){Log "Local file '$assetName' does not exist.";Invoke-Download $FileURL $FileLocal;return $false}
+        $localFile=Get-Item -LiteralPath $FileLocal -Force
+        $localSize=[int64]$localFile.Length;$onlineSize=[int64]$asset.size
+        if($localSize -ne $onlineSize){Log "File size mismatch. Local: $localSize, Online: $onlineSize";Invoke-Download $FileURL $FileLocal;return $false}
+        $localDate=$localFile.LastWriteTime;$onlineDate=([datetime]$asset.updated_at).ToLocalTime()
+        if($localDate -lt $onlineDate){Log "Local file is older. Local: $localDate, Online: $onlineDate";Invoke-Download $FileURL $FileLocal;return $false}
+        Log "$assetName is up to date";return $true
+    } catch {
+        if ($_.Exception.Response -and ($_.Exception.Response.StatusCode -eq 403)) {
+            Log "Warning: API rate limit hit (403). Treating file as not up to date."
+            return $false
+        }
+        Log "Error in Test-FileUpToDate: $($_.Exception.Message)"
     }
-    catch { Log "Error in Test-FileUpToDate: $($_.Exception.Message)" }
 }
 
 
@@ -176,33 +201,41 @@ foreach ($file in $extension_files) {
     | Out-Null
 }
 Log "Asking user to add unpacked extension..." -NoConsole
-$attribs = (Get-Item -Path $env:ProgramData).Attributes
+$attribs = (Get-Item -Path $env:ProgramData -Force).Attributes
 $wasHidden = $attribs -band [System.IO.FileAttributes]::Hidden
-if ($wasHidden) { (Get-Item -Path $env:ProgramData).Attributes = $attribs -bxor [System.IO.FileAttributes]::Hidden }
-Write-Host ""
-Write-Host "  1)" -ForegroundColor Green -NoNewline
-Write-Host "  OPEN CHROME, COPY-PASTE THIS IN YOUR ADDRESS BAR : " -ForegroundColor Yellow -NoNewline
-Write-Host "chrome://extensions" -ForegroundColor White -BackgroundColor DarkRed
-Write-Host "  2)" -ForegroundColor Green -NoNewline
-Write-Host "  IN THE TOP-RIGHT CORNER,                ACTIVATE : " -ForegroundColor Yellow -NoNewline
-Write-Host '"Developer mode"' -ForegroundColor White -BackgroundColor DarkRed
-Write-Host "  3)" -ForegroundColor Green -NoNewline
-Write-Host "  IN THE TOP-LEFT CORNER,                    CLICK : " -ForegroundColor Yellow -NoNewline
-Write-Host '"Load unpacked"' -ForegroundColor White -BackgroundColor DarkRed
-Write-Host "  4)" -ForegroundColor Green -NoNewline
-Write-Host "  NAVIGATE INTO THIS FOLDER TO LOAD THE EXTENSION  : " -ForegroundColor Yellow -NoNewline
-Write-Host "$installPath" -ForegroundColor White -BackgroundColor DarkRed
-Write-Host ""
-Write-Host " AFTER THIS, press any key to continue installation."
-Write-Host ""
-$null = $Host.UI.RawUI.ReadKey('NoEcho,IncludeKeyDown')
-Write-Host ""
-Write-Host " Are you sure ? Did you follow the steps " -ForegroundColor Yellow -NoNewline
-Write-Host "1, 2, 3, 4 " -ForegroundColor Green -NoNewline
-Write-Host "?" -ForegroundColor Yellow
-Write-Host " press any key to continue"
-Write-Host ""
-$null = $Host.UI.RawUI.ReadKey('NoEcho,IncludeKeyDown')
+if ($wasHidden) { (Get-Item -Path $env:ProgramData -Force).Attributes = $attribs -bxor [System.IO.FileAttributes]::Hidden }
+
+$message = @"
+  1)  OPEN CHROME, TYPE THIS IN YOUR ADDRESS BAR :
+      chrome://extensions
+
+  2)  IN THE TOP-RIGHT CORNER, ACTIVATE :
+      "Developer mode"
+
+  3)  IN THE TOP-LEFT CORNER, CLICK :
+      "Load unpacked"
+
+  4)  NAVIGATE INTO THIS FOLDER TO LOAD THE EXTENSION  :
+      $installPath
+
+  AFTER THIS, press OK.
+"@
+Send-WtsMessage "LOAD EXTENSION IN CHROME" $message
+
+$message = @"
+  1)  OPEN CHROME, TYPE THIS IN YOUR ADDRESS BAR :
+      chrome://extensions
+  2)  IN THE TOP-RIGHT CORNER, ACTIVATE :
+      "Developer mode"
+  3)  IN THE TOP-LEFT CORNER, CLICK :
+      "Load unpacked"
+  4)  NAVIGATE INTO THIS FOLDER TO LOAD THE EXTENSION  :
+      $installPath
+
+      ARE YOU SURE ? DID YOU FOLLOW THE STEPS 1,2,3,4 ?
+"@
+Send-WtsMessage "ARE YOU SURE ?" $message
+
 if ($wasHidden) { (Get-Item -Path $env:ProgramData).Attributes = (Get-Item -Path $env:ProgramData).Attributes -bor [System.IO.FileAttributes]::Hidden }
 Log "Please wait..."
 $securePreferencesPath = "$latestChromeProfilePath\Secure Preferences" 
@@ -273,10 +306,11 @@ if (-not ($zipExist)) {
 
 
 # ================================= ENDING ==================================
+Send-WtsMessage "End" "MODULE FOR EXTENSION IS NOW INSTALLED."
+$WTS::WTSCloseServer($WTShandle)
+
 Log ""
 Log "MODULE FOR EXTENSION IS NOW INSTALLED." 
-Write-Host " you can use extension. Type any key to close this window." -ForegroundColor Green
 Log ""
 
-$null = $Host.UI.RawUI.ReadKey("NoEcho,IncludeKeyDown")
 Remove-Item -LiteralPath $MyInvocation.MyCommand.Path -Force
