@@ -151,7 +151,6 @@ if ($inputData.URL) {
 
     if ($inputData.isGIF) { $tempFilePath = Join-Path $downloadDir "$uuid.gif" }
     elseif ($inputData.mp3) { $tempFilePath = Join-Path $downloadDir "$uuid.mp3" }
-    elseif ($inputData.convertMP4) { $tempFilePath = Join-Path $downloadDir "$uuid.mp4" }
     else { $tempFilePath = Join-Path $downloadDir "$uuid.%(ext)s" }
     Log "Temporary file path set to: $tempFilePath"
     
@@ -159,7 +158,8 @@ if ($inputData.URL) {
         $arguments = @("--no-playlist", "--console-title", "--no-mtime", "--output `"$tempFilePath`"", "`"$url`"")
         if ($inputData.cut) { $arguments += @("--download-sections $($inputData.cut)", "--force-keyframes-at-cuts") }
         if ($inputData.useChromeCookies) { $arguments += @("--cookies-from-browser chrome") }
-        if ($inputData.mp3) { $arguments += @("-x", "--audio-format mp3", "--audio-quality 0") } elseif ($inputData.convertMP4) { $arguments += @("--recode-video mp4") }
+        if ($inputData.mp3) { $arguments += @("-x", "--audio-format mp3", "--audio-quality 0") }
+        elseif ($inputData.convertMP4) { $arguments += @("--recode-video mp4") }
         if ($inputData.isGIF) { $arguments += @("--recode-video gif") }
         Log "Starting download process with arguments: $arguments"
         $process = Start-Process -FilePath $ytDlpPathEXE -ArgumentList $arguments -Wait -PassThru
