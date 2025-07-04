@@ -4,7 +4,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         chrome.runtime.sendNativeMessage("freenitial_yt_dlp_host", payload, response => {
             if (chrome.runtime.lastError) {
                 console.warn("[Background] Native messaging error:", chrome.runtime.lastError.message);
-                sendResponse({ success: false, message: "Error: Downloader module not detected. Please try to reinstall:\nhttps://github.com/Freenitial/Videos_Download_Reel_Progress_Bar/releases/latest/download/setup.bat" });
+                sendResponse({ success: false, message: "Fail to communicate with module. Can be caused by ytdlp itself. Please install or update module :\nhttps://github.com/Freenitial/Videos_Download_Reel_Progress_Bar/releases/latest/download/setup.bat" });
                 return;
             }
             if (response && response.success) {
