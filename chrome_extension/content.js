@@ -117,7 +117,7 @@ const showNotification = (message, isSuccess = true, duration = 2500, finalPath 
           console.warn("[Extension] Copy Error:", chrome.runtime.lastError);
           copyButton.textContent = 'Error!';
           copyButton.style.backgroundColor = 'rgba(255, 150, 150, 0.85)';
-        } else if (response && response.success) {
+        } else if (response) {
           copyButton.textContent = 'Copied!';
           copyButton.disabled = true;
           copyButton.style.backgroundColor = 'rgba(150, 255, 150, 0.85)';
@@ -161,6 +161,7 @@ const formatTime = time => {
 const updateControlBarPosition = (video, controlBar) => {
   const isFullBarRequired = 
   (video._downloadUrl && video._downloadUrl.includes('facebook.com/reel/')) ||
+  /^https:\/\/(?:[^\/]+\.)?facebook\.com\/watch\?v=[^\/]+/.test(window.location.href) ||
   /^https:\/\/(?:[^\/]+\.)?youtube\.com\/shorts\/[^\/]+/.test(window.location.href) ||
   ["instagram", "tiktok"].includes(current_website);
   const rect = video.getBoundingClientRect();
@@ -646,6 +647,7 @@ const createControlBar = video => {
   // Determine if full control bar is required
   const isFullBarRequired =
     (video._downloadUrl && video._downloadUrl.includes('facebook.com/reel/')) ||
+    /^https:\/\/(?:[^\/]+\.)?facebook\.com\/watch\?v=[^\/]+/.test(window.location.href) ||
     /^https:\/\/(?:[^\/]+\.)?youtube\.com\/shorts\/[^\/]+/.test(window.location.href) ||
     ["instagram", "tiktok"].includes(current_website);
 
@@ -897,7 +899,6 @@ const updateActiveVideoControlBar = () => {
         return { url: window.location.href, isGIF: false };
       }
     }
-    // For Facebook, first check for the 'data-video-id' attribute in ancestor elements
     if (website === "facebook") {
       let currentNode = videoElement.parentElement;
       let depth = 0;
@@ -912,10 +913,12 @@ const updateActiveVideoControlBar = () => {
         depth++;
       }
     }
-    // Define selectors for each website
     const websiteSelectors = {
       facebook: {
-        ancestorSelector: 'div[data-instancekey]',
+        hooks: [                               
+          'div[data-instancekey]',
+          'div[style*="height: calc"]' // 
+        ],
         linkSelector: 'a[href*="/watch/?v="], a[href*="/videos/"]'
       },
       twitter: {
@@ -930,13 +933,23 @@ const updateActiveVideoControlBar = () => {
     };
     const selectors = websiteSelectors[website];
     if (!selectors) return { url: null, isGIF: false };
-    // Traverse ancestors to find the common container that holds the video element
     let commonAncestor = null;
     let currentElement = videoElement.parentElement;
     while (currentElement) {
-      if (currentElement.contains(videoElement) && currentElement.querySelector(selectors.ancestorSelector)) {
-        commonAncestor = currentElement;
-        break;
+      if (website === "facebook") {
+        const hasHook = selectors.hooks.some(sel => currentElement.querySelector(sel));
+        if (hasHook && currentElement.querySelector(selectors.linkSelector)) {
+          commonAncestor = currentElement;
+          break;
+        }
+      } else {
+        if (
+          currentElement.querySelector(selectors.ancestorSelector) &&
+          currentElement.querySelector(selectors.linkSelector)
+        ) {
+          commonAncestor = currentElement;
+          break;
+        }
       }
       currentElement = currentElement.parentElement;
     }
