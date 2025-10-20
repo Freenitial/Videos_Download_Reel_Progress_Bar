@@ -1,5 +1,5 @@
 <# :
-    @echo off & Title Disk Space Tracker v1.0 - by Freenitial
+    @echo off
     if exist %SystemRoot%\system32\WindowsPowerShell\v1.0\powershell.exe   set "powershell=%SystemRoot%\system32\WindowsPowerShell\v1.0\powershell.exe"
     if exist %SystemRoot%\Sysnative\WindowsPowerShell\v1.0\powershell.exe  set "powershell=%SystemRoot%\Sysnative\WindowsPowerShell\v1.0\powershell.exe"
     set args=%*
@@ -318,3 +318,4 @@ $WTS::WTSCloseServer($WTShandle)
 Log ""
 Log "MODULE FOR EXTENSION IS NOW INSTALLED." 
 Log ""
+
