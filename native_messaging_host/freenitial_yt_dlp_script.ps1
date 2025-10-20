@@ -81,47 +81,84 @@ else { throw "No valid parameter provided." }
 
 
 #--------------------------
-# Updates Checks
+# Updates (yt-dlp + PS1 self-update) every ≥ 4 hours
 #--------------------------
 $lastUpdateFile = Join-Path $basePath "lastupdate.txt"
+$needUpdate = $true
+
+try {
+    # Ensure TLS 1.2 for GitHub/API calls
+    [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+} catch { }
+
 if (Test-Path $lastUpdateFile) {
-    $elapsedHours = (Get-Date) - (Get-Item $lastUpdateFile).LastWriteTime
-    if ($elapsedHours.TotalHours -ge 4) { Log "Last update was over 4 hours ago ($([math]::Round($elapsedHours.TotalHours,2)) hours elapsed). Update needed." }
-    else { Log "Last update was within 4 hours ($([math]::Round($elapsedHours.TotalHours,2)) hours elapsed). No update needed." }
-}
-else {
-    Log "lastupdate.txt not found. Update needed."
-    Set-Content -Path $lastUpdateFile -Value $(Get-Date) -Encoding UTF8
-    Log "Updated lastupdate.txt"
-    # YT-DLP
-    try {
-        Log "Self updating yt-dlp"
-        $updateArgs = @("--update")
-        $updateProcess = Start-Process -FilePath $ytDlpPathEXE -ArgumentList $updateArgs -WindowStyle Hidden -Wait -PassThru
-        Log "yt-dlp self-update attempted. ExitCode: $($updateProcess.ExitCode)"
-    } 
-    catch { Log "yt-dlp self-update failed : $_" }
-    # PS1
-    try {
-        $release = Invoke-RestMethod "https://api.github.com/repos/Freenitial/Videos_Download_Reel_Progress_Bar/releases/latest"
-        $asset = $release.assets | Where-Object { $_.name -eq "freenitial_yt_dlp_script.ps1" }
-        $onlineDate = [datetime]$asset.updated_at
-        $localDate = (Get-Item $localPath).LastWriteTime.ToUniversalTime()
-        if ($onlineDate -gt $localDate) {
-            Log "Self updating PS1"
-            $tempNewScript = "temp_updated_script.ps1"
-            Invoke-WebRequest "https://github.com/Freenitial/Videos_Download_Reel_Progress_Bar/releases/latest/download/freenitial_yt_dlp_script.ps1" -OutFile $tempNewScript
-            Start-Sleep -Seconds 1
-            $tempNativeMessage = "temp_native_message.json"
-            $inputData | ConvertTo-Json -Compress | Out-File -FilePath $tempNativeMessage -Encoding UTF8
-            Copy-Item -Path $tempNewScript -Destination $localPath -Force | Out-Null
-            Log "PS1 update end, relaunching with saved native message from $tempNativeMessage"
-            & "$localPath" "$tempNativeMessage"
-            Exit
-        } 
-        else { Log "No PS1 update needed" }
+    $elapsed = (Get-Date) - (Get-Item $lastUpdateFile).LastWriteTime
+    if ($elapsed.TotalHours -ge 4) {
+        Log ("Last update was over 4 hours ago ({0} hours elapsed). Update needed." -f ([math]::Round($elapsed.TotalHours,2)))
+    } else {
+        Log ("Last update was within 4 hours ({0} hours elapsed). No update needed." -f ([math]::Round($elapsed.TotalHours,2)))
+        $needUpdate = $false
     }
-    catch { Log "Error while updating PS1: $_" }
+} else {
+    Log "lastupdate.txt not found. Update needed."
+}
+
+if ($needUpdate) {
+    # --- yt-dlp self-update ---
+    try {
+        Log "Updating yt-dlp (attempt --update-to stable)"
+        $updateArgs = @("--update-to","stable")
+        $up = Start-Process -FilePath $ytDlpPathEXE -ArgumentList $updateArgs -WindowStyle Hidden -Wait -PassThru
+        Log ("yt-dlp update ExitCode: {0}" -f $up.ExitCode)
+        if ($up.ExitCode -ne 0) {
+            Log "Retrying yt-dlp update with legacy --update"
+            $legacy = Start-Process -FilePath $ytDlpPathEXE -ArgumentList @("--update") -WindowStyle Hidden -Wait -PassThru
+            Log ("yt-dlp legacy update ExitCode: {0}" -f $legacy.ExitCode)
+        }
+    } catch {
+        Log ("yt-dlp update failed: {0}" -f $_)
+    }
+
+    # --- PS1 self-update from GitHub release ---
+    try {
+        $apiUrl = "https://api.github.com/repos/Freenitial/Videos_Download_Reel_Progress_Bar/releases/latest"
+        $release = Invoke-RestMethod -Uri $apiUrl -Headers @{ "User-Agent" = "Mozilla/5.0" }
+        $asset = $null
+        if ($release -and $release.assets) {
+            $asset = $release.assets | Where-Object { $_.name -eq "freenitial_yt_dlp_script.ps1" } | Select-Object -First 1
+        }
+        if ($asset) {
+            $onlineDate = [datetime]$asset.updated_at
+            $localDate = (Get-Item $localPath).LastWriteTime.ToUniversalTime()
+            if ($onlineDate -gt $localDate) {
+                Log "Self updating PS1"
+                $tempNewScript = Join-Path $basePath "temp_updated_script.ps1"
+                $downloadUrl = "https://github.com/Freenitial/Videos_Download_Reel_Progress_Bar/releases/latest/download/freenitial_yt_dlp_script.ps1"
+                Invoke-WebRequest -Uri $downloadUrl -OutFile $tempNewScript -Headers @{ "User-Agent" = "Mozilla/5.0" }
+                Start-Sleep -Milliseconds 500
+                $tempNativeMessage = Join-Path $basePath "temp_native_message.json"
+                $inputData | ConvertTo-Json -Compress | Out-File -FilePath $tempNativeMessage -Encoding UTF8
+                Copy-Item -Path $tempNewScript -Destination $localPath -Force | Out-Null
+                Log ("PS1 update end, relaunching with saved native message from {0}" -f $tempNativeMessage)
+                & "$localPath" "$tempNativeMessage"
+                exit
+            } else {
+                Log "No PS1 update needed"
+            }
+        } else {
+            Log "No matching PS1 asset found in latest release"
+        }
+    } catch {
+        Log ("Error while updating PS1: {0}" -f $_)
+    }
+
+    # Touch/update the marker so we do not re-check too often
+    try {
+        Set-Content -Path $lastUpdateFile -Value (Get-Date) -Encoding UTF8
+        Log "Updated lastupdate.txt"
+    } catch {
+        Log ("Failed updating lastupdate.txt: {0}" -f $_)
+    }
 }
 
 
@@ -156,13 +193,46 @@ if ($inputData.URL) {
     
     try {
         $arguments = @("--no-playlist", "--console-title", "--no-mtime", "--output `"$tempFilePath`"", "`"$url`"")
-        if ($inputData.cut) { $arguments += @("--download-sections $($inputData.cut)", "--force-keyframes-at-cuts") }
+        if ($inputData.cut) {
+            # Keep cuts stable and quote the section spec
+            $arguments += @(
+                "--download-sections `"$($inputData.cut)`"",
+                "--force-keyframes-at-cuts",
+                "--hls-use-mpegts",
+                # Prefer AVC/H.264 + m4a to avoid VP9/HLS edge cases during trimming
+                "-S", "`"vcodec:h264,res,acodec:m4a`"",
+                # Try Android first (better URLs), then iOS / Safari to avoid SABR or PO-token pitfalls
+                "--extractor-args", "`"youtube:player-client=android,ios,web_safari`""
+            )
+        }
         if ($inputData.useChromeCookies) { $arguments += @("--cookies-from-browser chrome") }
         if ($inputData.mp3) { $arguments += @("-x", "--audio-format mp3", "--audio-quality 0") }
         elseif ($inputData.convertMP4) { $arguments += @("--recode-video mp4") }
         if ($inputData.isGIF) { $arguments += @("--recode-video gif") }
+
         Log "Starting download process with arguments: $arguments"
-        $process = Start-Process -FilePath $ytDlpPathEXE -ArgumentList $arguments -Wait -PassThru
+        # Keep console open if requested: launch via powershell.exe -NoExit with -EncodedCommand and stop-parsing (--%)
+        $keepOpen = $false
+        if ($inputData.keepConsoleOpen) {
+            try { $keepOpen = [bool]$inputData.keepConsoleOpen } catch { $keepOpen = $false }
+        }
+        if ($keepOpen) {
+            Log "DEBUG keepConsoleOpen enabled: launching powershell.exe -NoExit with -EncodedCommand (--%)"
+            # Reuse your existing $arguments array (it already contains --output \"...%(ext)s\" and the quoted URL)
+            # Build a literal command that PS won't re-parse thanks to --%
+            $exeEscaped = $ytDlpPathEXE -replace "'", "''"
+            $literalArgs = [string]::Join(' ', $arguments)
+            $commandText = "& '$exeEscaped' --% $literalArgs"
+            # Encode as UTF-16LE for -EncodedCommand to avoid Start-Process quoting hell
+            $bytes = [Text.Encoding]::Unicode.GetBytes($commandText)
+            $b64   = [Convert]::ToBase64String($bytes)
+            $psArgs = @('-NoExit','-NoLogo','-NoProfile','-EncodedCommand', $b64)
+            $process = Start-Process -FilePath 'powershell.exe' -ArgumentList $psArgs -WindowStyle Normal -Wait -PassThru
+        }
+        else {
+            # Normal silent execution (no new console kept open)
+            $process = Start-Process -FilePath $ytDlpPathEXE -ArgumentList $arguments -Wait -PassThru
+        }
         Log "Download process exited with code: $($process.ExitCode)"
     
         if ($process.ExitCode -eq 0) {
