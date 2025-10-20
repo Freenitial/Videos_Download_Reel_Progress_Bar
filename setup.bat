@@ -1,6 +1,12 @@
-<# ::
-    cls & @echo off
-    copy /y "%~f0" "%TEMP%\%~n0.ps1" >NUL && powershell -Nologo -NoProfile -ExecutionPolicy Bypass -File "%TEMP%\%~n0.ps1"
+<# :
+    @echo off & Title Disk Space Tracker v1.0 - by Freenitial
+    if exist %SystemRoot%\system32\WindowsPowerShell\v1.0\powershell.exe   set "powershell=%SystemRoot%\system32\WindowsPowerShell\v1.0\powershell.exe"
+    if exist %SystemRoot%\Sysnative\WindowsPowerShell\v1.0\powershell.exe  set "powershell=%SystemRoot%\Sysnative\WindowsPowerShell\v1.0\powershell.exe"
+    set args=%*
+    if defined args set "args=%args:"=\"%"
+    %powershell% -NoLogo -NoProfile -Ex Bypass -Window Normal -Command ^
+        "$batFile='%~f0'; $sb=[ScriptBlock]::Create([IO.File]::ReadAllText('%~f0'));& $sb @args" %args% -scriptDir '%~dp0'
+    exit /b
 #>
 
 
@@ -312,5 +318,3 @@ $WTS::WTSCloseServer($WTShandle)
 Log ""
 Log "MODULE FOR EXTENSION IS NOW INSTALLED." 
 Log ""
-
-Remove-Item -LiteralPath $MyInvocation.MyCommand.Path -Force
