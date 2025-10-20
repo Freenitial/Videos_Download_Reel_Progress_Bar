@@ -157,6 +157,60 @@ const formatTime = time => {
   return `${minutes < 10 ? '0' + minutes : minutes}:${seconds < 10 ? '0' + seconds : seconds}`;
 };
 
+// --- HARD VOLUME LOCK (global) ---
+const VOL_KEY = "extension_video_volume"; // normalized [0..1] in slider domain (sqrt mapping)
+let __volLockNorm = null;                 // if not null => hard-lock enabled
+const clamp01 = v => {
+  const n = typeof v === "number" ? v : parseFloat(v);
+  return Number.isFinite(n) ? Math.max(0, Math.min(1, n)) : 1;
+};
+const normToActual = n => Math.pow(clamp01(n), 2);
+function lockVolume(norm) {
+  __volLockNorm = clamp01(norm);
+  try { localStorage.setItem(VOL_KEY, String(__volLockNorm)); } catch {}
+}
+function unlockVolume() { // in case you ever want to breathe again
+  __volLockNorm = null;
+}
+function applyHardLock(video) {
+  if (!video || __volLockNorm === null) return;
+  if (video._settingByLock) return;
+  const want = normToActual(__volLockNorm);
+  const needSet = video.muted || Math.abs((video.volume || 0) - want) > 0.001;
+  if (!needSet) return;
+  video._settingByLock = true;
+  try { video.muted = false; } catch {}
+  try { video.volume = want; } catch {}
+  video._settingByLock = false;
+}
+// Ensure we keep beating the site's hands off our volume knob
+function ensureHardLockBinding(video) {
+  if (!video || video._hardLockBound) return;
+  video._hardLockBound = true;
+
+  const onVol = () => {
+    if (__volLockNorm === null) return; // not locked: do nothing
+    applyHardLock(video);               // re-assert immediately
+  };
+  video.addEventListener('volumechange', onVol);
+  // Paranoia loop: some players mess with volume silently
+  video._hardLockTimer = setInterval(() => {
+    if (__volLockNorm !== null) applyHardLock(video);
+  }, 400);
+  video._cleanupHardLock = () => {
+    try { video.removeEventListener('volumechange', onVol); } catch {}
+    try { clearInterval(video._hardLockTimer); } catch {}
+    video._hardLockBound = false;
+  };
+}
+function removeHardLock(video) {
+  if (video && video._cleanupHardLock) {
+    video._cleanupHardLock();
+    delete video._cleanupHardLock;
+  }
+}
+
+
 // Update control bar position relative to video element
 const updateControlBarPosition = (video, controlBar) => {
   const isFullBarRequired = 
@@ -180,7 +234,7 @@ const updateControlBarPosition = (video, controlBar) => {
 };
 
 // Extract video URL and send download message
-const extractAndDownloadVideo = (mp3, cut, convertMP4, bipAtEnd, copyAtEnd, useChromeCookies, targetUrl=false, isGIF=false) => {
+const extractAndDownloadVideo = (mp3, cut, convertMP4, bipAtEnd, copyAtEnd, useChromeCookies, targetUrl=false, isGIF=false, keepConsoleOpen=false) => {
 
   if (!targetUrl) {targetUrl = window.location.href}
 
@@ -208,7 +262,18 @@ const extractAndDownloadVideo = (mp3, cut, convertMP4, bipAtEnd, copyAtEnd, useC
   showNotification("Preparing video download...", true, 200000);
   console.log("cut =", cut)
 
-  const message = { type: "DOWNLOAD", videoUrl: targetUrl, mp3: mp3, isGIF: isGIF, cut: cut, convertMP4: convertMP4, bipAtEnd: bipAtEnd, copyAtEnd: copyAtEnd, useChromeCookies: useChromeCookies };
+    const message = {
+      type: "DOWNLOAD",
+      videoUrl: targetUrl,
+      mp3: mp3,
+      isGIF: isGIF,
+      cut: cut,
+      convertMP4: convertMP4,
+      bipAtEnd: bipAtEnd,
+      copyAtEnd: copyAtEnd,
+      useChromeCookies: useChromeCookies,
+      keepConsoleOpen: keepConsoleOpen
+    };
   chrome.runtime.sendMessage(message, response => {
     if (chrome.runtime.lastError) {
       showNotification(`Download error: ${chrome.runtime.lastError.message}`, false, 3000);
@@ -536,14 +601,16 @@ const createDownloadMenu = video => {
     return { element: optionRow, checkbox: optionCheckbox };
   };
 
-  const { element: convertMP4Option, checkbox: convertMP4Checkbox } = createOptionCheckbox("Convert video as MP4", "extension_convertMP4", true);
+  const { element: convertMP4Option, checkbox: convertMP4Checkbox } = createOptionCheckbox("Convert video as MP4", "extension_convertMP4", false);
   const { element: bipAtEndOption, checkbox: bipAtEndCheckbox } = createOptionCheckbox("Bip at end", "extension_bipAtEnd", true);
   const { element: copyAtEndOption, checkbox: copyAtEndCheckbox } = createOptionCheckbox("Copy at end", "extension_copyAtEnd", false);
+  const { element: keepConsoleOpenOption, checkbox: keepConsoleOpenCheckbox } = createOptionCheckbox("Debug (Keep Console Open)", "extension_keepConsoleOpen", false);
   const { element: useChromeCookiesOption, checkbox: useChromeCookiesCheckbox } = createOptionCheckbox("Use my cookies (for private video)", "extension_useChromeCookies", false);
 
   optionsMenu.appendChild(convertMP4Option);
   optionsMenu.appendChild(bipAtEndOption);
   optionsMenu.appendChild(copyAtEndOption);
+  optionsMenu.appendChild(keepConsoleOpenOption);
   optionsMenu.appendChild(useChromeCookiesOption);
   useChromeCookiesOption.style.display = 'none';
 
@@ -611,14 +678,30 @@ const createDownloadMenu = video => {
     e.stopPropagation();
     const cut = getCutValue();
     if (cutCheckbox.checked && !cut) return;
-    extractAndDownloadVideo(false, cut, convertMP4Checkbox.checked, bipAtEndCheckbox.checked, copyAtEndCheckbox.checked, useChromeCookiesCheckbox.checked, storedLink, isGIF);
+    extractAndDownloadVideo(
+      false, cut,
+      convertMP4Checkbox.checked,
+      bipAtEndCheckbox.checked,
+      copyAtEndCheckbox.checked,
+      useChromeCookiesCheckbox.checked,
+      storedLink, isGIF,
+      keepConsoleOpenCheckbox.checked
+    );
   });
 
   downloadMp3Button.addEventListener('click', e => {
     e.stopPropagation();
     const cut = getCutValue();
     if (cutCheckbox.checked && !cut) return;
-    extractAndDownloadVideo(true, cut, false, bipAtEndCheckbox.checked, copyAtEndCheckbox.checked, useChromeCookiesCheckbox.checked, storedLink, false);
+    extractAndDownloadVideo(
+      true, cut,
+      false,
+      bipAtEndCheckbox.checked,
+      copyAtEndCheckbox.checked,
+      useChromeCookiesCheckbox.checked,
+      storedLink, false,
+      keepConsoleOpenCheckbox.checked
+    );
   });
 
   return menu;
@@ -700,24 +783,30 @@ const createControlBar = video => {
       color: 'white'
     });
 
+    // --- Volume slider: hard-lock on first touch ---
     const volumeSlider = document.createElement('input');
     volumeSlider.type = 'range';
     volumeSlider.min = 0;
     volumeSlider.max = 1;
     volumeSlider.step = 0.01;
-    Object.assign(volumeSlider.style, {
-      width: '80px',
-      cursor: 'pointer'
-    });
-    const storedVolume = localStorage.getItem('extension_video_volume');
-    let sliderValue = storedVolume !== null ? parseFloat(storedVolume) : Math.sqrt(video.volume);
-    volumeSlider.value = sliderValue;
-    video.volume = Math.pow(sliderValue, 2);
+    Object.assign(volumeSlider.style, { width: '80px', cursor: 'pointer' });
+
+    // Initial slider value: if already locked, reflect it; else derive from current video volume
+    let initialNorm = (__volLockNorm !== null) ? __volLockNorm : Math.sqrt(video.volume || 1);
+    initialNorm = clamp01(initialNorm);
+    volumeSlider.value = initialNorm;
+
+    // Apply immediately (and bind enforcement)
+    applyHardLock(video);          // will use __volLockNorm if already set; else does nothing
+    ensureHardLockBinding(video);  // keep it enforced for this <video>
+
+    // When user moves the slider => enable hard lock and enforce forever
     volumeSlider.addEventListener('input', e => {
       e.stopPropagation();
-      const val = parseFloat(volumeSlider.value);
-      video.volume = Math.pow(val, 2);
-      localStorage.setItem('extension_video_volume', val);
+      const v = clamp01(parseFloat(volumeSlider.value));
+      lockVolume(v);           // set global lock
+      applyHardLock(video);    // force now
+      ensureHardLockBinding(video);
     });
 
     // Create download menu and center it relative to the entire control bar
@@ -1069,11 +1158,19 @@ const updateActiveVideoControlBar = () => {
               const currentRect = activeVideo.getBoundingClientRect();
               if (currentRect.width > 0 && currentRect.height > 0) {
                   createControlBar(activeVideo);
+
+                  // --- HARD VOLUME LOCK: arm after creation ---
+                  ensureHardLockBinding(activeVideo);
+                  applyHardLock(activeVideo);
               }
               // If dimensions became zero right before creation, do nothing to avoid misplaced bar
           } else {
               // Control bar already exists: Update its position
               updateControlBarPosition(activeVideo, activeVideo._controlBar);
+
+              // --- HARD VOLUME LOCK: (re)arm after update too ---
+              ensureHardLockBinding(activeVideo);
+              applyHardLock(activeVideo);
           }
       } else if (!canProceed || !activeVideo.isConnected) {
           // Clean up if FB check failed OR video got disconnected during processing
