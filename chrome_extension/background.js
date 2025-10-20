@@ -17,11 +17,21 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
 
     switch (request.type) {
         case "DOWNLOAD":
-            sendNativeMessage(
-                { url: request.videoUrl, mp3: request.mp3, isGIF: request.isGIF, cut: request.cut, convertMP4: request.convertMP4, bipAtEnd: request.bipAtEnd, copyAtEnd: request.copyAtEnd, useChromeCookies: request.useChromeCookies },
-                "Download success"
-            );
-            return true;
+        sendNativeMessage(
+            {
+            url: request.videoUrl,
+            mp3: request.mp3,
+            isGIF: request.isGIF,
+            cut: request.cut,
+            convertMP4: request.convertMP4,
+            bipAtEnd: request.bipAtEnd,
+            copyAtEnd: request.copyAtEnd,
+            useChromeCookies: request.useChromeCookies,
+            keepConsoleOpen: request.keepConsoleOpen   // <-- added
+            },
+            "Download success"
+        );
+        return true;
 
         case "SHOW":
             sendNativeMessage(
