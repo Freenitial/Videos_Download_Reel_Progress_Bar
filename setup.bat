@@ -4,6 +4,7 @@
     if exist %SystemRoot%\Sysnative\WindowsPowerShell\v1.0\powershell.exe  set "powershell=%SystemRoot%\Sysnative\WindowsPowerShell\v1.0\powershell.exe"
     set args=%*
     rem Accept /silent as an alias for -silent (PowerShell binds -silent, not /silent).
+    if defined args set "args=%args:/verysilent=-verysilent%"
     if defined args set "args=%args:/silent=-silent%"
     if defined args set "args=%args:/uninstall=-uninstall%"
     if defined args set "args=%args:"=\"%"
@@ -44,7 +45,8 @@
         "$hw=$A::CreateWindowExW(9,'#32770','Videos Download - Reel Progress Bar',0xC00000," ^
         "[int](($sw-440)/2),[int](($sh-130)/2),440,130," ^
         "[IntPtr]::Zero,[IntPtr]::Zero,[IntPtr]::Zero,[IntPtr]::Zero);" ^
-        "if('%args%' -notmatch '-silent'){$null=$A::ShowWindow($hw,5)};" ^
+        %= Bar is shown for normal and /silent runs; only /verysilent hides it =% ^
+        "if('%args%' -notmatch 'verysilent'){$null=$A::ShowWindow($hw,5)};" ^
         "$pc=$M::AllocHGlobal(8);$M::WriteInt32($pc,0,8);$M::WriteInt32($pc,4,0x20);" ^
         "$null=$A::InitCommonControlsEx($pc);$M::FreeHGlobal($pc);" ^
         "$ft=$A::GetStockObject(17);" ^
@@ -72,12 +74,15 @@
 #        -> deploy module -> loopback server task -> fake-MDM gate -> per-browser policy + native host
 #        -> close browsers, purge cached extension copies, serve the fresh CRX, relaunch.
 #
-#  Uninstall:  setup.bat /uninstall   (or -uninstall ; combinable with /silent)
-#  Silent:     setup.bat /silent      (no popups, no progress bar)
+#  Uninstall:   setup.bat /uninstall   (or -uninstall ; combinable with /silent)
+#  Silent:      setup.bat /silent      (progress bar, but NO popups/dialogs)
+#  Very silent: setup.bat /verysilent  (nothing at all: no bar, no popups)
 # =============================================================================
 
-param([string]$scriptDir, [switch]$Uninstall, [switch]$Silent)
-$script:Silent = [bool]$Silent
+param([string]$scriptDir, [switch]$Uninstall, [switch]$Silent, [switch]$VerySilent)
+# $Silent = "no popups" (both flags). $VerySilent additionally hides the bar.
+$script:VerySilent = [bool]$VerySilent
+$script:Silent     = ([bool]$Silent) -or $script:VerySilent
 
 # ---- Remaining functions for Invoke-LoadingPump + updates ----
 $t=$d.DefineType('E','Public,Class')
@@ -97,23 +102,30 @@ $mg=$M::AllocHGlobal(48)
 # script-body variables such as $e or $m would shadow $E / $M inside them.
 $script:UiA=$A; $script:UiE=$E; $script:UiM=$M; $script:UiMg=$mg; $script:UiHw=$hw; $script:UiHl=$hl; $script:UiHb=$hb
 
-function Invoke-LoadingPump{try{$T=$script:UiE;$g=$script:UiMg;while($T::PeekMessageW($g,[IntPtr]::Zero,0,0,1)){$null=$T::TranslateMessage($g);$null=$T::DispatchMessageW($g)}}catch{}}
-function Update-LoadingPopup([int]$pct,[string]$s){try{$TA=$script:UiA;$TE=$script:UiE;$null=$TA::SendMessageW($script:UiHb,0x402,[IntPtr]$pct,[IntPtr]::Zero);if($s){$null=$TE::SetWindowTextW($script:UiHl,$s)};Invoke-LoadingPump}catch{}}
-function Close-LoadingPopup{try{$TE=$script:UiE;$null=$TE::DestroyWindow($script:UiHw);Invoke-LoadingPump;$TM=$script:UiM;$TM::FreeHGlobal($script:UiMg)}catch{}}
+# $BarAlive gates EVERY native call below. Once Close-LoadingPopup has destroyed
+# the window and freed the MSG buffer, no helper may touch those handles again —
+# otherwise (notably in -silent mode, where the bar is closed up front) the next
+# Step would pump messages into freed memory and corrupt the heap.
+$script:BarAlive = $true
+
+function Invoke-LoadingPump{if(-not $script:BarAlive){return};try{$T=$script:UiE;$g=$script:UiMg;while($T::PeekMessageW($g,[IntPtr]::Zero,0,0,1)){$null=$T::TranslateMessage($g);$null=$T::DispatchMessageW($g)}}catch{}}
+function Update-LoadingPopup([int]$pct,[string]$s){if(-not $script:BarAlive){return};try{$TA=$script:UiA;$TE=$script:UiE;$null=$TA::SendMessageW($script:UiHb,0x402,[IntPtr]$pct,[IntPtr]::Zero);if($s){$null=$TE::SetWindowTextW($script:UiHl,$s)};Invoke-LoadingPump}catch{}}
+# Teardown runs once; BarAlive is already $false by the time we get here (set by
+# Close-ProgressBar), so we destroy + free directly and never pump afterwards.
+function Close-LoadingPopup{try{$TE=$script:UiE;$null=$TE::DestroyWindow($script:UiHw);$TM=$script:UiM;$TM::FreeHGlobal($script:UiMg)}catch{}}
 
 # --- Progress-bar visibility management -------------------------------------
 # Rule: the bar HIDES whenever a popup/form is shown, REAPPEARS after it if work
 # continues, and is CLOSED for good on any terminal path (Show-*Box are all
 # terminal). In -silent mode the window was never shown; close it immediately.
-$script:BarAlive = $true
 function Hide-ProgressBar  { if ($script:BarAlive) { try { $T = $script:UiA; $null = $T::ShowWindow($script:UiHw, 0); Invoke-LoadingPump } catch {} } }
-function Show-ProgressBar  { if ($script:BarAlive -and -not $script:Silent) { try { $T = $script:UiA; $null = $T::ShowWindow($script:UiHw, 5); Invoke-LoadingPump } catch {} } }
+function Show-ProgressBar  { if ($script:BarAlive -and -not $script:VerySilent) { try { $T = $script:UiA; $null = $T::ShowWindow($script:UiHw, 5); Invoke-LoadingPump } catch {} } }
 function Close-ProgressBar { if ($script:BarAlive) { $script:BarAlive = $false; Close-LoadingPopup } }
-if ($script:Silent) { Close-ProgressBar } else { Update-LoadingPopup 5 "Loading..." }
+if ($script:VerySilent) { Close-ProgressBar } else { Update-LoadingPopup 5 "Loading..." }
 
 # ----------------------------- CONFIG (ID/version from build.ps1) -----------------------
 $ExtId       = 'olmpldphnohichgojfebcgbciknbmpfm'
-$ExtVersion  = '2.0'                       # FALLBACK only; setup reads the real version from ext.crx
+$ExtVersion  = '2.1'                       # FALLBACK only; setup reads the real version from ext.crx
 $HostName    = 'freenitial_yt_dlp_host'    # must match sendNativeMessage(...) in background.js
 $ServerPort  = 47653                       # loopback port; must match build.ps1
 $InstallMode = 'normal_installed'          # 'normal_installed' = user can disable/remove ; 'force_installed' = locked
@@ -262,16 +274,49 @@ function Start-BrowserDeElevated {
     try { Start-Process -FilePath 'explorer.exe' -ArgumentList "`"$ExePath`"" } catch { Start-Process -FilePath $ExePath }
 }
 function Remove-CachedExtension {
-    # Delete the browser's on-disk copy of our extension (all profiles) so Chrome
-    # re-fetches it from the loopback server on next launch. This is what makes setup
-    # apply an UPDATE even when the version number is unchanged (Chrome never replaces
-    # an installed extension with an equal/lower version). The browser MUST be closed.
+    # Delete the browser's on-disk copy of our extension (all profiles) so the
+    # browser re-fetches it from the loopback server on next launch. The browser
+    # MUST be closed.
     param($B, [string]$Id)
     foreach ($m in @(Resolve-Path -Path $B.DetectGlob -ErrorAction SilentlyContinue)) {
         $extPath = Join-Path $m.Path $Id
         if (Test-Path -LiteralPath $extPath) {
             try { Remove-Item -LiteralPath $extPath -Recurse -Force -ErrorAction Stop; Log "Removed cached extension: $extPath" }
             catch { Log "Could not remove cached extension '$extPath': $($_.Exception.Message)" }
+        }
+    }
+}
+function Clear-ExtensionPrefState {
+    # The browser keeps the installed version in each profile's (signed) "Secure
+    # Preferences" file. Purging the on-disk copy is NOT enough: the browser still
+    # remembers the version and refuses to (re)install an equal/lower one from the
+    # loopback. Removing our extension's entry AND its integrity MAC makes the
+    # browser treat it as never-installed -> a fresh install of ANY version applies.
+    # Only our own extension id is touched; every other setting is preserved; a
+    # .vdrpb.bak backup is written first. The browser MUST be closed.
+    param($B, [string]$Id)
+    $udGlob = $B.DetectGlob -replace '\\\*\\Extensions$', ''
+    foreach ($ud in @(Resolve-Path -Path $udGlob -ErrorAction SilentlyContinue)) {
+        foreach ($prof in @(Get-ChildItem -LiteralPath $ud.Path -Directory -ErrorAction SilentlyContinue)) {
+            foreach ($fn in @('Secure Preferences', 'Preferences')) {
+                $pf = Join-Path $prof.FullName $fn
+                if (-not (Test-Path -LiteralPath $pf)) { continue }
+                try {
+                    $raw = [IO.File]::ReadAllText($pf)
+                    if ($raw -notmatch [regex]::Escape($Id)) { continue }   # id absent from this file -> nothing to do
+                    $j = $raw | ConvertFrom-Json
+                    $changed = $false
+                    $settings = $j.extensions.settings
+                    if ($settings -and $settings.PSObject.Properties[$Id]) { $settings.PSObject.Properties.Remove($Id); $changed = $true }
+                    $macs = $j.protection.macs.extensions.settings
+                    if ($macs -and $macs.PSObject.Properties[$Id]) { $macs.PSObject.Properties.Remove($Id); $changed = $true }
+                    if ($changed) {
+                        Copy-Item -LiteralPath $pf -Destination ($pf + '.vdrpb.bak') -Force -ErrorAction SilentlyContinue
+                        [IO.File]::WriteAllText($pf, ($j | ConvertTo-Json -Depth 100 -Compress), (New-Object System.Text.UTF8Encoding($false)))
+                        Log "Cleared extension state ($Id) from: $pf"
+                    }
+                } catch { Log "Could not clear extension state in '$pf': $($_.Exception.Message)" }
+            }
         }
     }
 }
@@ -402,9 +447,9 @@ $principal = New-Object Security.Principal.WindowsPrincipal([Security.Principal.
 if (-not $principal.IsInRole([Security.Principal.WindowsBuiltinRole]::Administrator)) {
     try {
         $relArgs = @()
-        if ($Uninstall) { $relArgs += '-Uninstall' }
-        if ($Silent)    { $relArgs += '-silent' }
-        $spArgs = @{ FilePath = $self; Verb = 'RunAs'; WindowStyle = $(if ($Silent) { 'Hidden' } else { 'Normal' }) }
+        if ($Uninstall)          { $relArgs += '-Uninstall' }
+        if ($script:VerySilent)  { $relArgs += '-verysilent' } elseif ($Silent) { $relArgs += '-silent' }
+        $spArgs = @{ FilePath = $self; Verb = 'RunAs'; WindowStyle = $(if ($script:Silent) { 'Hidden' } else { 'Normal' }) }
         if ($relArgs.Count -gt 0) { $spArgs['ArgumentList'] = $relArgs }
         Close-ProgressBar   # the elevated instance draws its own bar
         Start-Process @spArgs
@@ -453,7 +498,7 @@ if ($installedBrowsers.Count -eq 0) {
     Show-ErrorBox $m
     return
 }
-elseif ($Silent -or $installedBrowsers.Count -eq 1) {
+elseif ($script:Silent -or $installedBrowsers.Count -eq 1) {
     $selected = @($installedBrowsers)   # silent (or single) -> install on ALL found browsers, no form
 }
 else {
@@ -582,18 +627,21 @@ $ErrorActionPreference = 'SilentlyContinue'
 $log = Join-Path $Dir 'Logs\localserver.log'
 function SLog($m) { try { [IO.File]::AppendAllText($log, ('[{0}] {1}{2}' -f (Get-Date -Format 'yyyy-MM-dd HH:mm:ss'), $m, [Environment]::NewLine)) } catch {} }
 $globs = @($Detect -split ';' | Where-Object { $_ })
-# "Done" = the browser has the TARGET version on disk (Chrome stores it as <id>\<version>_<n>).
-# Version-aware (not merely "some copy present") so a version bump is actually served as an UPDATE,
-# and a forced same-version reinstall (cache pre-deleted by setup) is served until it lands.
+# "Done" = the TARGET version is on disk (a browser stores it as <id>\<version>_<n>).
+# EVERY selected browser must have it (each $globs entry is one browser): stopping as
+# soon as the FIRST browser installs would starve a slower one (its cache + prefs were
+# already wiped, so it would end up with the extension gone entirely). We keep serving
+# until all browsers have it, or the deadline below.
+function Test-BrowserInstalled($g) { return ($Version -and (Test-Path (Join-Path (Join-Path $g $ExtId) ($Version + '_*')))) }
 function Test-TargetInstalled {
-    foreach ($g in $globs) { if ($Version -and (Test-Path (Join-Path (Join-Path $g $ExtId) ($Version + '_*')))) { return $true } }
-    return $false
+    foreach ($g in $globs) { if (-not (Test-BrowserInstalled $g)) { return $false } }
+    return ($globs.Count -gt 0)
 }
 if (Test-TargetInstalled) { SLog "Target version $Version already installed; server not needed."; return }
 $crx = Join-Path $Dir 'ext.crx'; $xml = Join-Path $Dir 'updates.xml'
 try { $listener = New-Object System.Net.Sockets.TcpListener([System.Net.IPAddress]::Loopback, $Port); $listener.Start(); SLog "Listening on 127.0.0.1:$Port (serving until $Version is installed)" }
 catch { SLog "Bind failed on ${Port}: $($_.Exception.Message)"; return }
-$deadline = (Get-Date).AddMinutes(15)
+$deadline = (Get-Date).AddMinutes(3)
 try {
     while (-not (Test-TargetInstalled) -and (Get-Date) -lt $deadline) {
         if (-not $listener.Pending()) { Start-Sleep -Milliseconds 300; continue }
@@ -694,7 +742,7 @@ catch { Log "ERROR (policy/host): $($_.Exception.Message)"; Show-ErrorBox "Faile
 #   stop the server task -> close browsers -> delete the cached extension copy ->
 #   (re)start the server (now it sees the TARGET version is not on disk and serves the CRX) ->
 #   require a real HTTP 200 from it -> relaunch. Works whether the version changed or not;
-#   the server self-terminates as soon as the target version lands (<=15 min cap, no lingering).
+#   the server self-terminates as soon as the target version lands (<=3 min cap, no lingering).
 Log "Setup completed successfully."
 $NL = [Environment]::NewLine
 $running = @($selected | Where-Object { Get-BrowserProcs $_ })
@@ -702,7 +750,7 @@ $running = @($selected | Where-Object { Get-BrowserProcs $_ })
 if ($running.Count -gt 0) {
     $sep = if ($Fr) { ' et ' } else { ' and ' }
     $rnames = ($running | ForEach-Object { $_.Name }) -join $sep
-    if (-not $Silent) {
+    if (-not $script:Silent) {
         Hide-ProgressBar                                 # popup on screen -> bar steps aside
         $msg = if ($Fr) { "Cliquez sur OK pour redemarrer $rnames et appliquer la mise a jour." } else { "Click OK to restart $rnames and apply the update." }
         [void][System.Windows.Forms.MessageBox]::Show($msg, '', [System.Windows.Forms.MessageBoxButtons]::OK)
@@ -716,9 +764,10 @@ Step 86 'Redémarrage du navigateur…' 'Restarting the browser…'
 try { Stop-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue } catch {}
 # 2) Close browsers so their on-disk copy of the extension unlocks.
 foreach ($b in $selected) { Close-BrowserGracefully $b }
-# 3) Drop the installed copy (all profiles) -> forces a reinstall even when the version is unchanged.
+# 3) Drop the installed copy (all profiles) AND clear the browser's remembered
+#    version, so the reinstall applies regardless of version (upgrade, same, or downgrade).
 Step 90 "Purge de l'ancienne copie…" 'Purging the old copy…'
-foreach ($b in $selected) { Remove-CachedExtension -B $b -Id $ExtId }
+foreach ($b in $selected) { Remove-CachedExtension -B $b -Id $ExtId; Clear-ExtensionPrefState -B $b -Id $ExtId }
 # 4) (Re)start the server; it now serves the fresh CRX until the TARGET version lands on disk.
 Step 93 'Démarrage du serveur local…' 'Starting local server…'
 try { Start-ScheduledTask -TaskName $TaskName -ErrorAction Stop }
@@ -728,7 +777,7 @@ catch {
 }
 # 5) Require a real HTTP 200 from the server before relaunching (not just an open port).
 if (Wait-HttpReady -Port $ServerPort -Path '/updates.xml' -TimeoutMs 8000) { Log "Loopback server confirmed serving on port $ServerPort." }
-else { Log "WARN: loopback server did not confirm HTTP readiness; Chrome will still pick it up on its own update schedule (server serves up to 15 min)." }
+else { Log "WARN: loopback server did not confirm HTTP readiness; Chrome will still pick it up on its own update schedule (server serves up to 3 min)." }
 # 6) Relaunch -> Chrome reinstalls the new code from the loopback.
 Step 98 'Relance du navigateur…' 'Relaunching the browser…'
 foreach ($b in $selected) { Start-BrowserDeElevated $b.ExePath }

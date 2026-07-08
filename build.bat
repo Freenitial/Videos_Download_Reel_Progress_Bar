@@ -152,7 +152,7 @@ try {
     # match. Warn loudly instead of shipping a broken package.
     $setupPath = Join-Path $SrcDir 'setup.bat'
     if (Test-Path -LiteralPath $setupPath) {
-        $idMatch = [regex]::Match([IO.File]::ReadAllText($setupPath), "\$ExtId\s*=\s*'([a-p]{32})'")
+        $idMatch = [regex]::Match([IO.File]::ReadAllText($setupPath), '\$ExtId\s*=\s*''([a-p]{32})''')
         if ($idMatch.Success -and $idMatch.Groups[1].Value -ne $extId) {
             Show-Result 'Videos Download - Build WARNING' (
                 "This signing key produces extension ID:" + [Environment]::NewLine + $extId + [Environment]::NewLine + [Environment]::NewLine +
