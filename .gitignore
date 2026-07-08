@@ -1,0 +1,29 @@
+# Private code-signing key — it defines the extension ID (olmpldph...).
+# It intentionally lives in the folder so any machine rebuilds the SAME ID,
+# but it must NEVER be published. Do not commit it.
+_signing/
+*.pem
+
+# Build artefacts (dist\ is entirely produced by build.bat; ext.crx is the release asset)
+dist/
+*.crx
+
+# Runtime binaries fetched by setup.bat / the host (never commit)
+*.exe
+*.zip
+
+# Generated at install time by setup.bat — the local copies are stale dev leftovers
+freenitial_yt_dlp_host.json
+freenitial_yt_dlp_wrapper.bat
+
+# Local tooling / workspace — never publish
+.claude/
+RELEASE_NOTES.md
+
+# Logs / state
+Logs/
+lastupdate.txt
+update_state.txt
+version.txt
+temp_updated_script.ps1
+temp_native_message.json
