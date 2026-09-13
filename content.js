@@ -180,11 +180,12 @@ const injectStyles = () => {
     .vdrpb-ibtn svg { width: 16px; height: 16px; pointer-events: none; }
     .vdrpb-time { flex: none; min-width: 34px; text-align: center; white-space: nowrap; font-size: 12px; color: #cfd9e3; font-variant-numeric: tabular-nums; }
     .vdrpb-range { -webkit-appearance: auto; appearance: auto; accent-color: #3b82f6; margin: 0; padding: 0; height: 16px; cursor: pointer; background: transparent; }
-    .vdrpb-progress { position: relative; flex: 1; display: flex; align-items: center; min-width: 130px; margin: 0 2px; }
+    .vdrpb-progress { position: relative; flex: 1; display: flex; align-items: center; min-width: 60px; margin: 0 2px; }
     .vdrpb-progress .vdrpb-range { width: 100%; }
     .vdrpb-cutrange { position: absolute; top: 50%; height: 6px; transform: translateY(-50%); display: none; background: rgba(250,204,21,.55); border-radius: 3px; pointer-events: none; }
     .vdrpb-volume { display: flex; align-items: center; gap: 1px; flex: none; }
-    .vdrpb-volume .vdrpb-range { width: 72px; }
+    .vdrpb-volume .vdrpb-range { width: 60px; }
+    .extension-control-bar.vdrpb-narrow .vdrpb-volume .vdrpb-range { width: 40px; }
     .vdrpb-sep { flex: none; width: 1px; height: 18px; margin: 0 3px; background: rgba(255,255,255,.14); }
 
     .vdrpb-download-menu {
@@ -503,14 +504,6 @@ const STEPS = ['Analysis', 'Download', 'Processing', 'Done'];
 const stageToStep = stage =>
   stage === 'download' ? 1 : stage === 'postprocess' ? 2 : stage === 'finalize' ? 3 : 0;
 
-const MIME_BY_EXT = {
-  mp4: 'video/mp4', webm: 'video/webm', mkv: 'video/x-matroska', mov: 'video/quicktime', flv: 'video/x-flv', '3gp': 'video/3gpp',
-  mp3: 'audio/mpeg', m4a: 'audio/mp4', aac: 'audio/aac', opus: 'audio/ogg', ogg: 'audio/ogg', wav: 'audio/wav',
-  gif: 'image/gif', webp: 'image/webp'
-};
-const fileNameOf = path => String(path || '').split(/[\\/]/).pop();
-const mimeOf = path => MIME_BY_EXT[(fileNameOf(path).split('.').pop() || '').toLowerCase()] || 'application/octet-stream';
-
 const copyText = txt => {
   const fallbackCopy = () => {
     const ta = document.createElement('textarea'); ta.value = txt;
@@ -525,7 +518,7 @@ const copyText = txt => {
 
 // Card for one download job. Callbacks set by the owner: onCancel(), onRetry(),
 // onDismiss() (closed by the user), onLocalRemove() (auto-dismissed in this tab),
-// onServe(cb) (cb receives { url } or { error } for dragging the file out).
+// onDragPrepare(), onDrag(cb) (cb receives { result, message } once the drag ends).
 const createDownloadCard = (sourceUrl, variant, startedAt) => {
   const stack = getStack();
   const card = document.createElement('div');
@@ -690,38 +683,32 @@ const createDownloadCard = (sourceUrl, variant, startedAt) => {
     return b;
   };
 
-  // Drag the finished file out of the browser (desktop, Explorer, other apps): the
-  // file is served on 127.0.0.1 by the native host and handed over as DownloadURL.
-  const mkDragButton = path => {
+  // Drag the finished file out of the browser (folder, desktop, chat or mail app):
+  // the press is handed to the native host, which drags the real file once the
+  // pointer moves.
+  const mkDragButton = () => {
     const label = '⿻ Drag';
     const b = document.createElement('button'); b.textContent = label; b.className = 'vdrpb-btn';
-    b.draggable = true;
-    b.title = 'Drag the file to a folder, the desktop or another application';
+    b.title = 'Hold and drag the file to a folder, the desktop or an app';
     b.style.cursor = 'grab';
-    let url = '', pending = false;
-    const prepare = () => {
-      if (url || pending || !controller.onServe) return;
-      pending = true;
-      controller.onServe(r => {
-        pending = false;
-        if (r && r.url) url = r.url;
-        else if (r && r.error) b.title = r.error;
+    const warm = () => { if (controller.onDragPrepare) controller.onDragPrepare(); };
+    b.addEventListener('pointerenter', warm);
+    b.addEventListener('focus', warm);
+    b.addEventListener('pointerdown', e => {
+      if (e.button !== 0 || !controller.onDrag) return;
+      e.preventDefault(); e.stopPropagation();
+      controller.onDrag(r => {
+        if (!r || r.result === 'dropped' || r.result === 'cancelled') return;
+        if (r.result === 'released') flashLabel(b, 'Hold and drag', label);
+        else { flashLabel(b, 'Failed', label); if (r.message) b.title = r.message; }
       });
-    };
-    ['pointerenter', 'pointerdown', 'focus'].forEach(t => b.addEventListener(t, prepare));
-    b.addEventListener('dragstart', e => {
-      e.stopPropagation();
-      if (!url) { e.preventDefault(); prepare(); flashLabel(b, 'Preparing… drag again', label); return; }
-      e.dataTransfer.setData('DownloadURL', `${mimeOf(path)}:${fileNameOf(path)}:${url}`);
-      e.dataTransfer.setData('text/plain', path);
-      e.dataTransfer.effectAllowed = 'copy';
     });
-    b.addEventListener('click', e => { e.stopPropagation(); prepare(); flashLabel(b, 'Drag me to a folder', label); });
+    b.addEventListener('click', e => e.stopPropagation());
     return b;
   };
 
   const controller = {
-    card, get finished() { return finished; }, onCancel: null, onRetry: null, onDismiss: null, onLocalRemove: null, onServe: null,
+    card, get finished() { return finished; }, onCancel: null, onRetry: null, onDismiss: null, onLocalRemove: null, onDragPrepare: null, onDrag: null,
     remove,
     setQueued(q) {
       if (finished || q === queued) return;
@@ -790,7 +777,7 @@ const createDownloadCard = (sourceUrl, variant, startedAt) => {
         const file = paths[0];
         if (paths.length > 1) sizeLine.textContent = `${paths.length} files — Show, Copy and Drag use the first one`;
         actions.append(
-          mkDragButton(file),
+          mkDragButton(),
           mkHostButton('🗁 Show', 'SHOW', { finalPath: file }, true, () => close()),
           mkHostButton('⧉ Copy', 'COPY', { finalPath: file }, false, b => { b.textContent = 'Copied'; b.disabled = true; })
         );
@@ -905,6 +892,9 @@ const isFullBarFor = video =>
   /^https:\/\/(?:[^\/]+\.)?youtube\.com\/shorts\/[^\/]+/.test(window.location.href) ||
   ["instagram", "tiktok"].includes(current_website);
 
+const FULL_BAR_MAX_W = 400;
+const FULL_BAR_MIN_W = 320;
+
 const updateControlBarPosition = (video, controlBar) => {
   const rect = video.getBoundingClientRect();
   if (rect.width === 0 && rect.height === 0) return;   // detached/hidden video: keep the last position
@@ -912,11 +902,14 @@ const updateControlBarPosition = (video, controlBar) => {
   // never forces a synchronous layout with an offsetHeight read after a write.
   const barH = controlBar._h || controlBar.offsetHeight;
   let barW = controlBar._w || controlBar.offsetWidth;
-  // The full bar follows the video's width (long progress track on wide players).
+  // The full bar follows the video's width, up to a compact maximum.
   if (controlBar._isFullBar) {
-    barW = Math.round(Math.min(640, Math.max(340, rect.width - 40)));
+    barW = Math.round(Math.min(FULL_BAR_MAX_W, Math.max(FULL_BAR_MIN_W, rect.width - 40)));
     const ws = barW + 'px';
-    if (controlBar.style.width !== ws) controlBar.style.width = ws;
+    if (controlBar.style.width !== ws) {
+      controlBar.style.width = ws;
+      controlBar.classList.toggle('vdrpb-narrow', barW < 370);
+    }
   }
   // Inside a fullscreen ELEMENT the containing block is the (position:fixed)
   // fullscreenElement anchored at the viewport origin — do NOT add document
@@ -952,7 +945,7 @@ const updateControlBarPosition = (video, controlBar) => {
 // ---------------------------------------------------------------------------
 const cardsById = new Map();         // job id -> card controller
 const hiddenJobs = new Set();        // job ids whose card this tab closed or auto-dismissed
-const serveWaiters = new Map();      // job id -> callbacks waiting for a drag URL
+const dragWaiters = new Map();       // job id -> callbacks waiting for the end of a drag
 const CARD_RECENT_MS = 20000;        // a job that finished before this tab saw it is shown this long
 let uiPort = null;
 let uiRetryTimer = 0;
@@ -980,16 +973,31 @@ const syncJob = job => {
     card.onRetry = () => { forgetCard(id); sendUi({ type: 'retry', id }); };
     card.onDismiss = () => { forgetCard(id); sendUi({ type: 'dismiss', id }); };
     card.onLocalRemove = () => forgetCard(id);
-    card.onServe = cb => {
-      const list = serveWaiters.get(id) || [];
+    card.onDragPrepare = () => sendUi({ type: 'dragPrepare', id });
+    card.onDrag = cb => {
+      const list = dragWaiters.get(id) || [];
       list.push(cb);
-      serveWaiters.set(id, list);
-      if (list.length === 1 && !sendUi({ type: 'serve', id })) { serveWaiters.delete(id); cb({ error: 'Extension unavailable' }); }
+      dragWaiters.set(id, list);
+      if (!sendUi({ type: 'drag', id, at: Date.now() })) { endDrag(id, { result: 'error', message: 'Extension unavailable. Reload the page.' }); }
     };
     cardsById.set(id, card);
   }
   renderJob(card, job);
 };
+const endDrag = (id, result) => {
+  const list = dragWaiters.get(id) || [];
+  dragWaiters.delete(id);
+  list.forEach(cb => { try { cb(result); } catch {} });
+};
+// While a drag started here is in progress, this page refuses files: the browser
+// would otherwise open the dropped file in place of the page.
+const refuseOwnFileDrop = e => {
+  if (!dragWaiters.size || !e.dataTransfer || ![...e.dataTransfer.types].includes('Files')) return;
+  e.preventDefault();
+  e.stopImmediatePropagation();
+  e.dataTransfer.dropEffect = 'none';
+};
+['dragenter', 'dragover', 'drop'].forEach(type => window.addEventListener(type, refuseOwnFileDrop, { capture: true, signal: lifetime.signal }));
 const forgetCard = id => { hiddenJobs.add(id); cardsById.delete(id); };
 const dropCard = id => {
   const card = cardsById.get(id);
@@ -1034,12 +1042,9 @@ const onUiMessage = msg => {
     case 'rejected':
       showNotification(msg.message || 'Link not supported for download', false, 2500);
       break;
-    case 'serve': {
-      const list = serveWaiters.get(msg.id) || [];
-      serveWaiters.delete(msg.id);
-      list.forEach(cb => { try { cb(msg); } catch {} });
+    case 'drag':
+      endDrag(msg.id, msg);
       break;
-    }
   }
 };
 
@@ -1056,8 +1061,7 @@ const connectUi = () => {
   uiPort.onDisconnect.addListener(() => {
     void chrome.runtime.lastError;
     uiPort = null;
-    for (const [id, list] of serveWaiters) list.forEach(cb => { try { cb({ id, error: 'Extension restarted' }); } catch {} });
-    serveWaiters.clear();
+    for (const id of [...dragWaiters.keys()]) endDrag(id, { result: 'error', message: 'Extension restarted' });
     // The worker stops when no download runs; reconnect right away only when a
     // card here is still in progress (anything else reconnects on demand).
     const live = [...cardsById.values()].some(c => !c.finished);
@@ -1869,6 +1873,31 @@ const isCovered = (video, rect) => {
   return !playerRootOf(video, rect).contains(top);
 };
 
+// True when something outside the video's player sits over the bar (YouTube's
+// guide drawer, a site header, a dialog): the bar then stays hidden under it,
+// like the site's own controls. Only a layer reaching past the video counts: a
+// badge or caption drawn inside the video's box never hides the bar.
+const isBarCovered = (bar, video) => {
+  const b = bar.getBoundingClientRect();
+  if (!b.width || !b.height) return false;
+  const vr = video.getBoundingClientRect();
+  let root = null;
+  const y = Math.max(0, Math.min(window.innerHeight - 1, b.top + b.height / 2));
+  for (const x of [b.left + 12, b.left + b.width / 2, b.right - 12]) {
+    const px = Math.max(0, Math.min(window.innerWidth - 1, x));
+    for (const el of document.elementsFromPoint(px, y)) {
+      if (el.closest && el.closest(OWN_UI_SELECTOR)) continue;
+      if (el === video || video.contains(el) || el.contains(video)) break;
+      if (!root) root = playerRootOf(video, vr);
+      if (root.contains(el)) break;
+      const er = el.getBoundingClientRect();
+      if (er.left < vr.left - 2 || er.top < vr.top - 2 || er.right > vr.right + 2 || er.bottom > vr.bottom + 2) return true;
+      break;
+    }
+  }
+  return false;
+};
+
 // Smallest ancestor (at most 12 levels up) holding a link that matches, as long
 // as it does not also hold another video: a scope with two videos is a feed, not
 // this video's item, and its first link may belong to any post.
@@ -2199,7 +2228,11 @@ const tick = ts => {
     if (activeBar) {
       const menu = activeBar._menu;
       const typing = !!(menu && menu._typing && menu._typing());
-      const show = activeBar._hovered || typing || (performance.now() - lastMouseMoveTime <= 1500);
+      // A bar not placed yet (its size observer has not run) sits at the page origin.
+      const covered = !!(activeBar._h && activeBar._video && activeBar._video.isConnected && isBarCovered(activeBar, activeBar._video));
+      const visibility = covered ? 'hidden' : '';
+      if (activeBar.style.visibility !== visibility) activeBar.style.visibility = visibility;
+      const show = !covered && (activeBar._hovered || typing || (performance.now() - lastMouseMoveTime <= 1500));
       const target = show ? '1' : '0';
       if (activeBar.style.opacity !== target) activeBar.style.opacity = target;
       // A faded bar never keeps its menu open for the next time it shows.

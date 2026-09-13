@@ -653,7 +653,7 @@ try {
 if     ($inputData.URL)         { $mode = 'download';    $url = [string]$inputData.URL; Log "Input URL = $url" }
 elseif ($inputData.SHOW)        { $mode = 'show';        $fileToShow = [string]$inputData.SHOW; Log "File to show = $fileToShow" }
 elseif ($inputData.COPY)        { $mode = 'copy';        $fileToCopy = [string]$inputData.COPY; Log "File to copy = $fileToCopy" }
-elseif ($inputData.SERVE)       { $mode = 'serve';       $fileToServe = [string]$inputData.SERVE; Log "File to serve = $fileToServe" }
+elseif ($inputData.DRAG)        { $mode = 'drag';        Log "Drag host request" }
 elseif ($inputData.OPENLOG)     { $mode = 'openlog';     $logToOpen = [string]$inputData.OPENLOG; Log "Log to open = $logToOpen" }
 elseif ($null -ne $inputData.STAT) { $mode = 'stat' }
 elseif ($inputData.PICKFOLDER)  { $mode = 'pickfolder';  Log "Folder picker request" }
@@ -757,10 +757,10 @@ if ($mode -eq 'download') {
     $pathFile    = Join-Path $logsDirectory ("path_" + $uniq + ".txt")
     $metaFile    = Join-Path $logsDirectory ("meta_" + $uniq + ".txt")
     $ffprog      = Join-Path $logsDirectory ("ffprog_" + $uniq + ".txt")
-    # Private temp dir on the SAME volume as the final file (cheap final move);
+    # Private hidden temp dir on the SAME volume as the final file (cheap final move);
     # cleanup deletes it recursively without touching sibling downloads.
     $tempDir     = Join-Path $downloadDir ('.vdrpb_tmp_' + $uniq)
-    try { if (-not (Test-Path -LiteralPath $tempDir)) { New-Item -ItemType Directory -Path $tempDir -Force | Out-Null } } catch { }
+    try { if (-not (Test-Path -LiteralPath $tempDir)) { (New-Item -ItemType Directory -Path $tempDir -Force).Attributes += 'Hidden' } } catch { }
     # Sweep temp dirs orphaned by a hard host death (crash/shutdown mid-download);
     # the 24h age guard keeps concurrent live runs untouched.
     try {
@@ -1513,74 +1513,489 @@ elseif ($mode -eq 'copy') {
 
 
 #==========================================================================
-# SERVE (long-lived: local HTTP server for dragging a file out of the browser)
+# DRAG (long-lived: drags a finished file out of the browser)
 #==========================================================================
-# Serves ONE media file at http://127.0.0.1:<ephemeral port>/<token> until the
-# extension closes the port or nothing is requested for 15 minutes.
-elseif ($mode -eq 'serve') {
-    $token = [string]$inputData.token
-    $serveExt = [IO.Path]::GetExtension($fileToServe).ToLowerInvariant()
-    if ($token -notmatch '^[0-9a-f]{32}$' -or -not (Test-Path -LiteralPath $fileToServe -PathType Leaf) -or ($MediaExtensions -notcontains $serveExt)) {
-        Log "SERVE refused: $fileToServe"
-        Send-NativeMessage @{ type = 'serve'; success = $false; message = 'File not available.' }
-        [Environment]::Exit(0)
+# The Drag button forwards its press as { drag: <path>, seq, at }. The mouse
+# button is still held in the browser: once the pointer moves, the file is
+# dragged like a file taken from Explorer, so folders, the desktop and apps
+# (chat, mail) receive the real file. One reply per request:
+# { type: 'drag', seq, result: dropped | cancelled | released | error }.
+# { prepare: <path> } (pointer over a Drag button) loads the file's thumbnail for
+# the drag image ahead and gets no reply.
+elseif ($mode -eq 'drag') {
+    $dragSource = @'
+using System;
+using System.Collections.Generic;
+using System.Diagnostics;
+using System.Drawing;
+using System.Drawing.Drawing2D;
+using System.Drawing.Imaging;
+using System.Runtime.InteropServices;
+using System.Runtime.InteropServices.ComTypes;
+using System.Threading;
+
+public static class VdrpbDrag {
+    [DllImport("user32.dll")] static extern short GetAsyncKeyState(int vKey);
+    [DllImport("user32.dll")] static extern int GetSystemMetrics(int index);
+    [DllImport("user32.dll")] static extern bool GetCursorPos(out POINT point);
+    [DllImport("user32.dll")] static extern IntPtr GetForegroundWindow();
+    [DllImport("user32.dll")] static extern uint GetWindowThreadProcessId(IntPtr hwnd, IntPtr processId);
+    [DllImport("user32.dll")] static extern bool AttachThreadInput(uint thread, uint attachTo, bool attach);
+    [DllImport("user32.dll")] static extern bool PostThreadMessage(uint thread, uint msg, IntPtr wParam, IntPtr lParam);
+    [DllImport("user32.dll")] static extern bool SetProcessDPIAware();
+    [DllImport("kernel32.dll")] static extern uint GetCurrentThreadId();
+    [DllImport("ole32.dll")] static extern int OleInitialize(IntPtr reserved);
+    [DllImport("ole32.dll")] static extern int DoDragDrop(IDataObject data, IDropSource source, int okEffects, out int effect);
+    [DllImport("shell32.dll", CharSet = CharSet.Unicode, PreserveSig = false)]
+    static extern void SHCreateItemFromParsingName(string path, IntPtr bindContext, [MarshalAs(UnmanagedType.LPStruct)] Guid riid, [MarshalAs(UnmanagedType.Interface)] out IShellItem item);
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)]
+    static extern IntPtr CreateWindowEx(int exStyle, string className, string windowName, uint style, int x, int y, int width, int height, IntPtr parent, IntPtr menu, IntPtr instance, IntPtr param);
+    [DllImport("user32.dll")] static extern bool DestroyWindow(IntPtr hwnd);
+    [DllImport("user32.dll")] static extern bool SetWindowPos(IntPtr hwnd, IntPtr after, int x, int y, int width, int height, uint flags);
+    [DllImport("user32.dll")] static extern bool UpdateLayeredWindow(IntPtr hwnd, IntPtr screenDc, ref POINT position, ref SIZE size, IntPtr sourceDc, ref POINT sourcePosition, int colorKey, ref BLENDFUNCTION blend, int flags);
+    [DllImport("user32.dll")] static extern bool PeekMessage(out MSG msg, IntPtr hwnd, uint min, uint max, uint remove);
+    [DllImport("user32.dll")] static extern bool TranslateMessage(ref MSG msg);
+    [DllImport("user32.dll")] static extern IntPtr DispatchMessage(ref MSG msg);
+    [DllImport("user32.dll")] static extern uint MsgWaitForMultipleObjectsEx(uint count, IntPtr[] handles, uint milliseconds, uint wakeMask, uint flags);
+    [DllImport("user32.dll")] static extern bool PostMessage(IntPtr hwnd, uint msg, IntPtr wParam, IntPtr lParam);
+    [DllImport("user32.dll")] static extern IntPtr GetDC(IntPtr hwnd);
+    [DllImport("user32.dll")] static extern int ReleaseDC(IntPtr hwnd, IntPtr dc);
+    [DllImport("gdi32.dll")] static extern int GetDeviceCaps(IntPtr dc, int index);
+    [DllImport("gdi32.dll")] static extern IntPtr CreateCompatibleDC(IntPtr dc);
+    [DllImport("gdi32.dll")] static extern bool DeleteDC(IntPtr dc);
+    [DllImport("gdi32.dll")] static extern IntPtr SelectObject(IntPtr dc, IntPtr obj);
+    [DllImport("gdi32.dll")] static extern bool DeleteObject(IntPtr obj);
+    [DllImport("gdi32.dll")] static extern IntPtr CreateDIBSection(IntPtr dc, ref BITMAPINFOHEADER header, uint usage, out IntPtr bits, IntPtr section, uint offset);
+    [DllImport("gdi32.dll")] static extern int GetObject(IntPtr obj, int size, ref BITMAPSTRUCT bitmap);
+    [DllImport("gdi32.dll")] static extern int GetDIBits(IntPtr dc, IntPtr bitmap, uint startLine, uint lines, byte[] bits, ref BITMAPINFO info, uint usage);
+
+    [StructLayout(LayoutKind.Sequential)] struct POINT { public int X, Y; }
+    [StructLayout(LayoutKind.Sequential)] struct SIZE { public int Width, Height; }
+    [StructLayout(LayoutKind.Sequential, Pack = 1)] struct BLENDFUNCTION { public byte BlendOp, BlendFlags, SourceConstantAlpha, AlphaFormat; }
+    [StructLayout(LayoutKind.Sequential)] struct MSG { public IntPtr hwnd; public uint message; public IntPtr wParam, lParam; public uint time; public POINT pt; }
+    [StructLayout(LayoutKind.Sequential)] struct BITMAPINFOHEADER { public int biSize, biWidth, biHeight; public short biPlanes, biBitCount; public int biCompression, biSizeImage, biXPelsPerMeter, biYPelsPerMeter, biClrUsed, biClrImportant; }
+    [StructLayout(LayoutKind.Sequential)] struct BITMAPSTRUCT { public int bmType, bmWidth, bmHeight, bmWidthBytes; public ushort bmPlanes, bmBitsPixel; public IntPtr bmBits; }
+    [StructLayout(LayoutKind.Sequential)] struct BITMAPINFO { public BITMAPINFOHEADER bmiHeader; public uint bmiColors0, bmiColors1, bmiColors2; }
+
+    [ComImport, Guid("43826D1E-E718-42EE-BC55-A1E261C37BFE"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+    interface IShellItem {
+        [return: MarshalAs(UnmanagedType.Interface)]
+        object BindToHandler(IntPtr bindContext, [MarshalAs(UnmanagedType.LPStruct)] Guid handler, [MarshalAs(UnmanagedType.LPStruct)] Guid riid);
     }
-    $mimeTypes = @{ '.mp4' = 'video/mp4'; '.webm' = 'video/webm'; '.mkv' = 'video/x-matroska'; '.mov' = 'video/quicktime'; '.mp3' = 'audio/mpeg'; '.m4a' = 'audio/mp4'; '.aac' = 'audio/aac'; '.opus' = 'audio/ogg'; '.ogg' = 'audio/ogg'; '.wav' = 'audio/wav'; '.gif' = 'image/gif'; '.webp' = 'image/webp'; '.flv' = 'video/x-flv'; '.3gp' = 'video/3gpp' }
-    $mime = if ($mimeTypes.ContainsKey($serveExt)) { $mimeTypes[$serveExt] } else { 'application/octet-stream' }
-    $fileName = [IO.Path]::GetFileName($fileToServe)
-    $asciiName = ($fileName -replace '[^\x20-\x7E]', '_') -replace '["\\]', '_'
-    $disposition = "attachment; filename=`"$asciiName`"; filename*=UTF-8''" + [Uri]::EscapeDataString($fileName)
-    $listener = New-Object System.Net.Sockets.TcpListener([System.Net.IPAddress]::Loopback, 0)
-    try { $listener.Start() } catch {
-        Log "SERVE listen failed: $_"
-        Send-NativeMessage @{ type = 'serve'; success = $false; message = 'Could not open a local port.' }
-        [Environment]::Exit(0)
+
+    [ComImport, Guid("BCC18B79-BA16-442F-80C4-8A59C30C463B"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+    interface IShellItemImageFactory {
+        [PreserveSig] int GetImage(SIZE size, int flags, out IntPtr bitmap);
     }
-    $port = $listener.LocalEndpoint.Port
-    Send-NativeMessage @{ type = 'serve'; success = $true; port = $port }
-    Log "SERVE listening on 127.0.0.1:$port for $fileToServe"
-    $script:cancelFlag = Start-PortWatcher
-    $idle = [Diagnostics.Stopwatch]::StartNew()
-    try {
-        while (-not (Test-Cancelled) -and $idle.Elapsed.TotalMinutes -lt 15) {
-            if (-not $listener.Pending()) { Start-Sleep -Milliseconds 100; continue }
-            $client = $listener.AcceptTcpClient()
-            try {
-                $client.ReceiveTimeout = 5000
-                $client.SendTimeout = 60000
-                $ns = $client.GetStream()
-                $reader = New-Object System.IO.StreamReader($ns, [Text.Encoding]::ASCII, $false, 8192, $true)
-                $requestLine = $reader.ReadLine()
-                for ($h = 0; $h -lt 100; $h++) { $hl = $reader.ReadLine(); if ([string]::IsNullOrEmpty($hl)) { break } }
-                $isHead = $requestLine -match '^HEAD '
-                if ($requestLine -match '^(GET|HEAD)\s+/([0-9a-f]{32})(?:[?#]\S*)?\s+HTTP/1\.[01]$' -and $Matches[2] -eq $token -and (Test-Path -LiteralPath $fileToServe -PathType Leaf)) {
-                    $fs = [IO.File]::Open($fileToServe, [IO.FileMode]::Open, [IO.FileAccess]::Read, [IO.FileShare]::ReadWrite -bor [IO.FileShare]::Delete)
-                    try {
-                        $head = "HTTP/1.1 200 OK`r`nContent-Type: $mime`r`nContent-Length: $($fs.Length)`r`nContent-Disposition: $disposition`r`nCache-Control: no-store`r`nConnection: close`r`n`r`n"
-                        $hb = [Text.Encoding]::UTF8.GetBytes($head)
-                        $ns.Write($hb, 0, $hb.Length)
-                        if (-not $isHead) {
-                            $buf = New-Object byte[] 65536
-                            while (($n = $fs.Read($buf, 0, $buf.Length)) -gt 0) {
-                                $ns.Write($buf, 0, $n)
-                                if (Test-Cancelled) { break }
-                            }
-                        }
-                        $ns.Flush()
-                        Log "SERVE sent $($fs.Length) bytes"
-                    } finally { $fs.Dispose() }
-                } else {
-                    $nb = [Text.Encoding]::ASCII.GetBytes("HTTP/1.1 404 Not Found`r`nContent-Length: 0`r`nConnection: close`r`n`r`n")
-                    $ns.Write($nb, 0, $nb.Length)
-                }
-            } catch { Log "SERVE request error: $($_.Exception.Message)" }
-            finally { try { $client.Close() } catch { } }
-            $idle.Restart()
+
+    [ComImport, Guid("00000121-0000-0000-C000-000000000046"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+    public interface IDropSource {
+        [PreserveSig] int QueryContinueDrag(int escapePressed, int keyState);
+        [PreserveSig] int GiveFeedback(int effect);
+    }
+
+    const int DRAGDROP_S_DROP = 0x00040100;
+    const int DRAGDROP_S_CANCEL = 0x00040101;
+    const int DRAGDROP_S_USEDEFAULTCURSORS = 0x00040102;
+    const uint WM_MOUSEMOVE = 0x0200;
+    const uint WM_APP_WAKE = 0x8001;
+    static readonly Guid BHID_DataObject = new Guid("B8C0BD9F-ED24-455C-83E6-D5390C4FE8C4");
+    static volatile bool dragging;
+    static volatile bool abandoned;
+    static Ghost ghost;
+    static double scale = 1.0;
+
+    // The button was pressed in the browser, so the key state OLE keeps for this
+    // thread is not reliable: the drag follows the physical button.
+    class DropSource : IDropSource {
+        public int QueryContinueDrag(int escapePressed, int keyState) {
+            Ghost g = ghost;
+            if (g != null) g.Wake();
+            if (abandoned || escapePressed != 0 || (GetAsyncKeyState(0x1B) & 0x8000) != 0) return DRAGDROP_S_CANCEL;
+            return ButtonDown() ? 0 : DRAGDROP_S_DROP;
         }
-    } finally {
-        try { $listener.Stop() } catch { }
-        Log "SERVE stopped"
+        public int GiveFeedback(int effect) { return DRAGDROP_S_USEDEFAULTCURSORS; }
     }
+
+    public static void Init() {
+        try { SetProcessDPIAware(); } catch { }
+        OleInitialize(IntPtr.Zero);
+        IntPtr dc = GetDC(IntPtr.Zero);
+        scale = Math.Max(1.0, GetDeviceCaps(dc, 88) / 96.0);
+        ReleaseDC(IntPtr.Zero, dc);
+    }
+
+    public static bool ButtonDown() {
+        // With swapped buttons the physical left button reads as VK_RBUTTON.
+        int key = GetSystemMetrics(23) != 0 ? 0x02 : 0x01;
+        return (GetAsyncKeyState(key) & 0x8000) != 0;
+    }
+
+    // "moved" once the pointer leaves the drag threshold with the button held,
+    // "released" when the button comes up first (a click), "timeout" otherwise.
+    public static string WaitForGesture(int timeoutMs) {
+        POINT start;
+        GetCursorPos(out start);
+        int limitX = Math.Max(4, GetSystemMetrics(68)), limitY = Math.Max(4, GetSystemMetrics(69));
+        Stopwatch clock = Stopwatch.StartNew();
+        while (clock.ElapsedMilliseconds < timeoutMs) {
+            if (!ButtonDown()) return "released";
+            POINT p;
+            GetCursorPos(out p);
+            if (Math.Abs(p.X - start.X) >= limitX || Math.Abs(p.Y - start.Y) >= limitY) return "moved";
+            Thread.Sleep(10);
+        }
+        return "timeout";
+    }
+
+    // -------------------------------------------------------------------------
+    // Drag image cards, as premultiplied BGRA pixels ready for the layered window.
+    // Everything is drawn once: the thumbnail card when the pointer reaches the
+    // Drag button (low-priority thread), the spinner frames on first use. During
+    // a drag the pixels are only copied, and only when the card changes.
+    // -------------------------------------------------------------------------
+    class Card { public byte[] Pixels; public int Width, Height; }
+    const int SpinnerFrames = 12;
+    const int SpinnerFrameMs = 60;
+    static readonly Card[] spinner = new Card[SpinnerFrames];
+    static readonly Dictionary<string, Card> thumbnails = new Dictionary<string, Card>(StringComparer.OrdinalIgnoreCase);
+    static readonly List<string> thumbnailOrder = new List<string>();
+    static readonly HashSet<string> loading = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+    public static void LoadThumbnail(string path) {
+        lock (thumbnails) {
+            if (thumbnails.ContainsKey(path) || !loading.Add(path)) return;
+        }
+        Thread worker = new Thread(() => {
+            Card card = null;
+            IShellItem item = null;
+            try {
+                SHCreateItemFromParsingName(path, IntPtr.Zero, typeof(IShellItem).GUID, out item);
+                IShellItemImageFactory factory = (IShellItemImageFactory)item;
+                IntPtr handle;
+                // A video frame (SIIGBF_THUMBNAILONLY), or the file type's icon (SIIGBF_ICONONLY).
+                bool isIcon = false;
+                if (factory.GetImage(new SIZE { Width = 256, Height = 256 }, 0x08, out handle) != 0 || handle == IntPtr.Zero) {
+                    isIcon = true;
+                    if (factory.GetImage(new SIZE { Width = 96, Height = 96 }, 0x04, out handle) != 0) handle = IntPtr.Zero;
+                }
+                if (handle != IntPtr.Zero) {
+                    using (Bitmap image = FromShellBitmap(handle)) { if (image != null) card = RenderCard(image, isIcon, 0); }
+                }
+            } catch {
+            } finally {
+                if (item != null) Marshal.ReleaseComObject(item);
+            }
+            lock (thumbnails) {
+                loading.Remove(path);
+                if (card == null) return;
+                thumbnails[path] = card;
+                thumbnailOrder.Remove(path);
+                thumbnailOrder.Add(path);
+                while (thumbnailOrder.Count > 16) { thumbnails.Remove(thumbnailOrder[0]); thumbnailOrder.RemoveAt(0); }
+            }
+        });
+        worker.IsBackground = true;
+        worker.Priority = ThreadPriority.BelowNormal;
+        worker.SetApartmentState(ApartmentState.STA);
+        worker.Start();
+    }
+
+    static Card FindThumbnail(string path) {
+        lock (thumbnails) { Card card; return thumbnails.TryGetValue(path, out card) ? card : null; }
+    }
+
+    static Card SpinnerFrame(int frame) {
+        lock (spinner) {
+            if (spinner[frame] == null) spinner[frame] = RenderCard(null, false, frame);
+            return spinner[frame];
+        }
+    }
+
+    // Shell images are 32-bit bitmaps with premultiplied alpha (none at all for
+    // most video frames). GetDIBits hands the rows over top-down whatever the
+    // bitmap's own orientation. The handle is freed here.
+    static Bitmap FromShellBitmap(IntPtr handle) {
+        IntPtr screen = GetDC(IntPtr.Zero);
+        try {
+            BITMAPSTRUCT info = new BITMAPSTRUCT();
+            if (GetObject(handle, Marshal.SizeOf(typeof(BITMAPSTRUCT)), ref info) == 0 || info.bmWidth <= 0 || info.bmHeight <= 0) return null;
+            int w = info.bmWidth, h = info.bmHeight;
+            BITMAPINFO format = new BITMAPINFO();
+            format.bmiHeader = new BITMAPINFOHEADER { biSize = 40, biWidth = w, biHeight = -h, biPlanes = 1, biBitCount = 32 };
+            byte[] pixels = new byte[w * h * 4];
+            if (GetDIBits(screen, handle, 0, (uint)h, pixels, ref format, 0) != h) return null;
+            bool hasAlpha = false;
+            if (info.bmBitsPixel == 32) { for (int i = 3; i < pixels.Length; i += 4) { if (pixels[i] != 0) { hasAlpha = true; break; } } }
+            if (!hasAlpha) { for (int i = 3; i < pixels.Length; i += 4) pixels[i] = 255; }
+            Bitmap bmp = new Bitmap(w, h, PixelFormat.Format32bppPArgb);
+            BitmapData data = bmp.LockBits(new Rectangle(0, 0, w, h), ImageLockMode.WriteOnly, PixelFormat.Format32bppPArgb);
+            try {
+                for (int y = 0; y < h; y++) Marshal.Copy(pixels, y * w * 4, new IntPtr(data.Scan0.ToInt64() + (long)y * data.Stride), w * 4);
+            } finally { bmp.UnlockBits(data); }
+            return bmp;
+        } finally {
+            ReleaseDC(IntPtr.Zero, screen);
+            DeleteObject(handle);
+        }
+    }
+
+    // A rounded card: the thumbnail, the icon on a black card, or (image null)
+    // a black card with a spinner at the given frame.
+    static Card RenderCard(Bitmap image, bool isIcon, int frame) {
+        int maxSide = (int)Math.Round(150 * scale), minSide = (int)Math.Round(48 * scale);
+        int w, h;
+        if (image != null && !isIcon) {
+            double s = Math.Min((double)maxSide / image.Width, (double)maxSide / image.Height);
+            w = Math.Max(minSide, (int)Math.Round(image.Width * s));
+            h = Math.Max(minSide, (int)Math.Round(image.Height * s));
+        } else if (image != null) {
+            w = h = (int)Math.Round(96 * scale);
+        } else {
+            w = maxSide;
+            h = (int)Math.Round(maxSide * 9.0 / 16.0);
+        }
+        using (Bitmap bmp = new Bitmap(w, h, PixelFormat.Format32bppPArgb)) {
+            using (Graphics g = Graphics.FromImage(bmp))
+            using (GraphicsPath shape = RoundedRect(new RectangleF(0.5f, 0.5f, w - 1, h - 1), (float)(10 * scale))) {
+                g.SmoothingMode = SmoothingMode.AntiAlias;
+                g.InterpolationMode = InterpolationMode.HighQualityBicubic;
+                g.PixelOffsetMode = PixelOffsetMode.HighQuality;
+                if (image != null && !isIcon) {
+                    using (TextureBrush brush = new TextureBrush(image, WrapMode.Clamp)) {
+                        brush.ScaleTransform((float)w / image.Width, (float)h / image.Height);
+                        g.FillPath(brush, shape);
+                    }
+                } else {
+                    using (SolidBrush fill = new SolidBrush(Color.FromArgb(245, 10, 12, 16))) g.FillPath(fill, shape);
+                    if (image != null) {
+                        int side = (int)Math.Round(64 * scale);
+                        g.DrawImage(image, (w - side) / 2, (h - side) / 2, side, side);
+                    } else {
+                        float r = (float)(13 * scale), stroke = (float)(3 * scale), cx = w / 2f, cy = h / 2f;
+                        using (Pen track = new Pen(Color.FromArgb(55, 255, 255, 255), stroke)) g.DrawEllipse(track, cx - r, cy - r, 2 * r, 2 * r);
+                        using (Pen arc = new Pen(Color.FromArgb(240, 255, 255, 255), stroke)) {
+                            arc.StartCap = LineCap.Round;
+                            arc.EndCap = LineCap.Round;
+                            g.DrawArc(arc, cx - r, cy - r, 2 * r, 2 * r, frame * 360f / SpinnerFrames, 100);
+                        }
+                    }
+                }
+                using (Pen border = new Pen(Color.FromArgb(70, 255, 255, 255), Math.Max(1f, (float)scale))) g.DrawPath(border, shape);
+            }
+            BitmapData data = bmp.LockBits(new Rectangle(0, 0, w, h), ImageLockMode.ReadOnly, PixelFormat.Format32bppPArgb);
+            try {
+                byte[] pixels = new byte[w * h * 4];
+                for (int y = 0; y < h; y++) Marshal.Copy(new IntPtr(data.Scan0.ToInt64() + (long)y * data.Stride), pixels, y * w * 4, w * 4);
+                return new Card { Pixels = pixels, Width = w, Height = h };
+            } finally { bmp.UnlockBits(data); }
+        }
+    }
+
+    static GraphicsPath RoundedRect(RectangleF r, float radius) {
+        float d = Math.Min(radius * 2, Math.Min(r.Width, r.Height));
+        GraphicsPath path = new GraphicsPath();
+        path.AddArc(r.X, r.Y, d, d, 180, 90);
+        path.AddArc(r.Right - d, r.Y, d, d, 270, 90);
+        path.AddArc(r.Right - d, r.Bottom - d, d, d, 0, 90);
+        path.AddArc(r.X, r.Bottom - d, d, d, 90, 90);
+        path.CloseFigure();
+        return path;
+    }
+
+    // -------------------------------------------------------------------------
+    // The card follows the pointer in its own layered window, owned by a thread
+    // that sleeps until the pointer moves (short naps only while the spinner
+    // turns or the card fades in). It does not depend on the drop target.
+    // -------------------------------------------------------------------------
+    class Ghost {
+        const byte Opacity = 235;
+        const int FadeMs = 120;
+        readonly string path;
+        readonly object gate = new object();
+        volatile bool stop;
+        IntPtr window;
+        Thread thread;
+
+        public Ghost(string path) { this.path = path; }
+
+        IntPtr Window { get { lock (gate) return window; } set { lock (gate) window = value; } }
+
+        public void Start() {
+            thread = new Thread(Run);
+            thread.IsBackground = true;
+            thread.Start();
+        }
+
+        // Called on every pointer event of the drag.
+        public void Wake() {
+            IntPtr w = Window;
+            if (w != IntPtr.Zero) PostMessage(w, WM_APP_WAKE, IntPtr.Zero, IntPtr.Zero);
+        }
+
+        public void Stop() {
+            stop = true;
+            Wake();
+            if (thread != null) thread.Join(1000);
+        }
+
+        void Run() {
+            // WS_EX_LAYERED | WS_EX_TRANSPARENT | WS_EX_TOPMOST | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE, WS_POPUP:
+            // never focused and transparent to the pointer.
+            IntPtr hwnd = CreateWindowEx(0x00080000 | 0x20 | 0x8 | 0x80 | 0x08000000, "Static", "", 0x80000000, 0, 0, 1, 1, IntPtr.Zero, IntPtr.Zero, IntPtr.Zero, IntPtr.Zero);
+            if (hwnd == IntPtr.Zero) return;
+            Window = hwnd;
+            IntPtr screen = GetDC(IntPtr.Zero);
+            IntPtr memory = CreateCompatibleDC(screen);
+            IntPtr dib = IntPtr.Zero, previous = IntPtr.Zero, bits = IntPtr.Zero;
+            int dibWidth = 0, dibHeight = 0;
+            try {
+                Stopwatch clock = Stopwatch.StartNew();
+                Card shown = null;
+                byte shownAlpha = 0;
+                POINT last = new POINT { X = int.MinValue, Y = int.MinValue };
+                bool visible = false;
+                while (!stop) {
+                    MSG msg;
+                    while (PeekMessage(out msg, IntPtr.Zero, 0, 0, 1)) { TranslateMessage(ref msg); DispatchMessage(ref msg); }
+                    long elapsed = clock.ElapsedMilliseconds;
+                    Card thumb = FindThumbnail(path);
+                    Card card = thumb ?? SpinnerFrame((int)(elapsed / SpinnerFrameMs) % SpinnerFrames);
+                    byte alpha = (byte)Math.Min(Opacity, elapsed * Opacity / FadeMs);
+                    POINT p;
+                    GetCursorPos(out p);
+                    POINT at = new POINT { X = p.X - card.Width / 2, Y = p.Y + (int)Math.Round(16 * scale) };
+                    if (card != shown || alpha != shownAlpha) {
+                        if (card.Width != dibWidth || card.Height != dibHeight) {
+                            if (dib != IntPtr.Zero) { SelectObject(memory, previous); DeleteObject(dib); }
+                            BITMAPINFOHEADER header = new BITMAPINFOHEADER { biSize = 40, biWidth = card.Width, biHeight = -card.Height, biPlanes = 1, biBitCount = 32 };
+                            dib = CreateDIBSection(screen, ref header, 0, out bits, IntPtr.Zero, 0);
+                            previous = SelectObject(memory, dib);
+                            dibWidth = card.Width;
+                            dibHeight = card.Height;
+                            shown = null;
+                        }
+                        if (card != shown) Marshal.Copy(card.Pixels, 0, bits, card.Pixels.Length);
+                        SIZE size = new SIZE { Width = card.Width, Height = card.Height };
+                        POINT origin = new POINT();
+                        BLENDFUNCTION blend = new BLENDFUNCTION { SourceConstantAlpha = alpha, AlphaFormat = 1 };
+                        UpdateLayeredWindow(hwnd, screen, ref at, ref size, memory, ref origin, 0, ref blend, 2);
+                        if (!visible) { SetWindowPos(hwnd, new IntPtr(-1), 0, 0, 0, 0, 0x0001 | 0x0002 | 0x0010 | 0x0040); visible = true; }
+                        shown = card;
+                        shownAlpha = alpha;
+                        last = p;
+                    } else if (p.X != last.X || p.Y != last.Y) {
+                        SetWindowPos(hwnd, IntPtr.Zero, at.X, at.Y, 0, 0, 0x0001 | 0x0004 | 0x0010);
+                        last = p;
+                    }
+                    uint wait = alpha < Opacity ? 15u : thumb == null ? (uint)SpinnerFrameMs : 0xFFFFFFFFu;
+                    if (!stop) MsgWaitForMultipleObjectsEx(0, null, wait, 0x04FF, 0x0004);
+                }
+            } finally {
+                Window = IntPtr.Zero;
+                DestroyWindow(hwnd);
+                if (dib != IntPtr.Zero) { SelectObject(memory, previous); DeleteObject(dib); }
+                DeleteDC(memory);
+                ReleaseDC(IntPtr.Zero, screen);
+            }
+        }
+    }
+
+    // Drags the file like Explorer does. Returns the drop effect (0 = not dropped),
+    // or -1 when the mouse cannot be taken over from the window that holds it.
+    public static int Drag(string path) {
+        uint self = GetCurrentThreadId();
+        uint owner = GetWindowThreadProcessId(GetForegroundWindow(), IntPtr.Zero);
+        // OLE tracks the drag through the mouse capture, which the browser holds:
+        // sharing its input state is what lets OLE take it.
+        if (owner == 0 || owner == self || !AttachThreadInput(self, owner, true)) return -1;
+        IShellItem item = null;
+        IDataObject data = null;
+        dragging = true;
+        abandoned = false;
+        // A capture lost without a mouse message would leave OLE waiting after the
+        // release: the drag is then abandoned (cancelled, never dropped).
+        Thread watchdog = new Thread(() => {
+            Stopwatch clock = Stopwatch.StartNew();
+            long releasedAt = -1;
+            while (dragging) {
+                if (ButtonDown()) releasedAt = -1;
+                else if (releasedAt < 0) releasedAt = clock.ElapsedMilliseconds;
+                else if (clock.ElapsedMilliseconds - releasedAt > 500) {
+                    abandoned = true;
+                    POINT p;
+                    GetCursorPos(out p);
+                    PostThreadMessage(self, WM_MOUSEMOVE, IntPtr.Zero, (IntPtr)((p.Y << 16) | (p.X & 0xFFFF)));
+                }
+                Thread.Sleep(50);
+            }
+        });
+        watchdog.IsBackground = true;
+        int effect = 0;
+        try {
+            SHCreateItemFromParsingName(path, IntPtr.Zero, typeof(IShellItem).GUID, out item);
+            data = (IDataObject)item.BindToHandler(IntPtr.Zero, BHID_DataObject, typeof(IDataObject).GUID);
+            LoadThumbnail(path);
+            try { Ghost g = new Ghost(path); g.Start(); ghost = g; } catch { ghost = null; }
+            watchdog.Start();
+            DoDragDrop(data, new DropSource(), 1, out effect);
+        } finally {
+            dragging = false;
+            Ghost shownGhost = ghost;
+            ghost = null;
+            if (shownGhost != null) shownGhost.Stop();
+            AttachThreadInput(self, owner, false);
+            if (data != null) Marshal.ReleaseComObject(data);
+            if (item != null) Marshal.ReleaseComObject(item);
+        }
+        return abandoned ? 0 : effect;
+    }
+}
+'@
+    try {
+        Add-Type -TypeDefinition $dragSource -ReferencedAssemblies System.Drawing -ErrorAction Stop
+        [VdrpbDrag]::Init()
+    } catch {
+        Log "DRAG init failed: $_"
+        Send-NativeMessage @{ type = 'drag'; ready = $false; message = 'Dragging is not available on this system.' }
+        [Environment]::Exit(0)
+    }
+    Send-NativeMessage @{ type = 'drag'; ready = $true }
+    Log "DRAG ready"
+    while (-not $script:portDead) {
+        try { $json = Read-NativeStdin } catch { Log "DRAG read failed: $_"; break }
+        if ($null -eq $json) { break }
+        try { $req = $json | ConvertFrom-Json } catch { continue }
+        $isPrepare = $null -ne $req.prepare
+        $path = if ($isPrepare) { [string]$req.prepare } else { [string]$req.drag }
+        $mediaOk = $path -and (Test-Path -LiteralPath $path -PathType Leaf) -and ($MediaExtensions -contains [IO.Path]::GetExtension($path).ToLowerInvariant())
+        if ($mediaOk) { try { [VdrpbDrag]::LoadThumbnail($path) } catch { } }
+        if ($isPrepare) { continue }
+        $reply = @{ type = 'drag'; seq = $req.seq }
+        $age = 0
+        if ($null -ne $req.at) { try { $age = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds() - [int64]$req.at } catch { } }
+        if (-not $mediaOk) {
+            $reply.result = 'error'; $reply.message = 'File moved or deleted.'
+        } elseif ($age -gt 3000 -or -not [VdrpbDrag]::ButtonDown()) {
+            # A press that ended (or is too old to be this one) is a click, never a drag.
+            $reply.result = 'released'
+        } elseif ([VdrpbDrag]::WaitForGesture(60000) -ne 'moved') {
+            $reply.result = 'released'
+        } else {
+            try {
+                $effect = [VdrpbDrag]::Drag($path)
+                Log "DRAG $path -> effect $effect"
+                if ($effect -lt 0) { $reply.result = 'error'; $reply.message = 'Dragging is not available here. Use Copy, then paste.' }
+                elseif ($effect -ne 0) { $reply.result = 'dropped' }
+                else { $reply.result = 'cancelled' }
+            } catch {
+                Log "DRAG failed: $_"
+                $reply.result = 'error'; $reply.message = 'The file could not be dragged.'
+            }
+        }
+        Send-NativeMessage $reply
+    }
+    Log "DRAG stopped"
     [Environment]::Exit(0)
 }
 

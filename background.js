@@ -8,7 +8,7 @@ const MAX_CONCURRENT = 3;
 const HISTORY_MAX = 200;
 const PROGRESS_BROADCAST_MS = 250;       // at most 4 progress broadcasts per job per second
 const TERMINAL_KEEP_MS = 10 * 60000;     // finished jobs stay listed for late-opening tabs
-const SERVE_IDLE_MS = 10 * 60000;        // a drag server is closed 10 min after its last use
+const DRAG_IDLE_MS = 10 * 60000;         // the drag host is closed 10 min after its last use
 
 // ---------------------------------------------------------------------------
 // Downloads are owned here, not by the page: they keep running when the tab
@@ -16,9 +16,9 @@ const SERVE_IDLE_MS = 10 * 60000;        // a drag server is closed 10 min after
 // list through a "vdrpb-ui" port.
 //
 // UI -> background: hello · start {request, ref} · cancel {id} · dismiss {id} ·
-//                   clearFinished · retry {id} · serve {id | path}
+//                   clearFinished · retry {id} · dragPrepare {id | path} · drag {id | path, at}
 // background -> UI: list {jobs} · job {job} · removed {id} · accepted {ref, id} ·
-//                   dup {ref, id} · serve {id, path, url | error} · counts {active}
+//                   dup {ref, id} · drag {id, path, result, message} · counts {active}
 // ---------------------------------------------------------------------------
 const jobs = new Map();          // id -> job (plain object, see jobView)
 const natives = new Map();       // id -> native port of a running job
@@ -286,55 +286,76 @@ const startRequest = (port, request, ref) => {
 };
 
 // ---------------------------------------------------------------------------
-// Drag-out: a finished file is served by the native host on 127.0.0.1 so the
-// page can hand Chrome a DownloadURL. One server per file, reused while fresh.
+// Drag-out: a Drag button forwards its press to the native host, which drags the
+// real file once the pointer moves (folders, the desktop and apps all receive a
+// file). One host serves every tab; a pointer reaching a Drag button starts it
+// ahead so the press is not lost to its startup.
 // ---------------------------------------------------------------------------
-const serves = new Map();   // path -> { url, port, lastUse, pending: [callbacks] }
-const randomToken = () => [...crypto.getRandomValues(new Uint8Array(16))].map(b => b.toString(16).padStart(2, '0')).join('');
-const closeServe = path => {
-  const s = serves.get(path);
-  if (!s) return;
-  serves.delete(path);
-  if (s.port) { try { s.port.disconnect(); } catch {} }
+let dragHost = null;   // { port, lastUse, waiting: Map(seq -> callback) }
+let dragSeq = 1;
+const closeDragHost = () => {
+  const h = dragHost;
+  if (!h) return;
+  dragHost = null;
+  try { h.port.disconnect(); } catch {}
+  for (const cb of h.waiting.values()) cb({ result: 'error', message: 'The module stopped.' });
+  h.waiting.clear();
 };
 setInterval(() => {
-  const now = Date.now();
-  for (const [path, s] of serves) if (s.url && now - s.lastUse > SERVE_IDLE_MS) closeServe(path);
+  if (dragHost && !dragHost.waiting.size && Date.now() - dragHost.lastUse > DRAG_IDLE_MS) closeDragHost();
 }, 60000);
 
-const requestServe = (path, cb) => {
-  if (!path) { cb({ error: 'No file' }); return; }
-  const existing = serves.get(path);
-  if (existing) {
-    existing.lastUse = Date.now();
-    if (existing.url) cb({ url: existing.url });
-    else existing.pending.push(cb);
-    return;
-  }
-  const token = randomToken();
-  const s = { url: '', port: null, lastUse: Date.now(), pending: [cb] };
-  serves.set(path, s);
-  const fail = error => {
-    const pending = s.pending; s.pending = [];
-    if (serves.get(path) === s) serves.delete(path);
-    pending.forEach(f => f({ error }));
-  };
-  try {
-    s.port = chrome.runtime.connectNative(HOST);
-  } catch { fail(MODULE_ERR); return; }
-  s.port.onMessage.addListener(m => {
-    if (!m || m.type !== 'serve') return;
-    if (!m.success) { fail(m.message || 'File not available.'); try { s.port.disconnect(); } catch {} return; }
-    s.url = `http://127.0.0.1:${m.port}/${token}`;
-    const pending = s.pending; s.pending = [];
-    pending.forEach(f => f({ url: s.url }));
+const ensureDragHost = () => {
+  if (dragHost) { dragHost.lastUse = Date.now(); return dragHost; }
+  let port;
+  try { port = chrome.runtime.connectNative(HOST); } catch { return null; }
+  const h = { port, lastUse: Date.now(), waiting: new Map() };
+  dragHost = h;
+  port.onMessage.addListener(m => {
+    if (!m || m.type !== 'drag') return;
+    if (m.ready === false) {
+      for (const cb of h.waiting.values()) cb({ result: 'error', message: m.message || 'Dragging is not available.' });
+      h.waiting.clear();
+      return;
+    }
+    const cb = h.waiting.get(m.seq);
+    if (!cb) return;
+    h.waiting.delete(m.seq);
+    h.lastUse = Date.now();
+    cb(m);
   });
-  s.port.onDisconnect.addListener(() => {
-    void chrome.runtime.lastError;
-    if (serves.get(path) === s) serves.delete(path);
-    if (s.pending.length) fail('The module stopped.');
+  port.onDisconnect.addListener(() => {
+    const err = chrome.runtime.lastError;
+    if (dragHost === h) dragHost = null;
+    for (const cb of h.waiting.values()) cb({ result: 'error', message: err ? MODULE_ERR : 'The module stopped.' });
+    h.waiting.clear();
   });
-  try { s.port.postMessage({ SERVE: path, token }); } catch { fail(MODULE_ERR); }
+  post(port, { DRAG: true });
+  return h;
+};
+
+// A card names its job, the popup names the file.
+const dragPathOf = msg => {
+  const job = msg.id ? jobs.get(msg.id) : null;
+  return job ? job.finalPath : (typeof msg.path === 'string' ? msg.path : '');
+};
+
+// Only files this extension downloaded can be dragged.
+const isKnownFile = async path => {
+  if (!path) return false;
+  const has = e => e && (e.finalPath === path || (Array.isArray(e.finalPaths) && e.finalPaths.includes(path)));
+  if ([...jobs.values()].some(has)) return true;
+  const { history } = await storageGet(['history']);
+  return Array.isArray(history) && history.some(has);
+};
+
+const requestDrag = (path, at, cb) => {
+  const h = ensureDragHost();
+  if (!h) { cb({ result: 'error', message: MODULE_ERR }); return; }
+  const seq = dragSeq++;
+  h.waiting.set(seq, cb);
+  try { h.port.postMessage({ drag: path, seq, at: Number(at) || Date.now() }); }
+  catch { h.waiting.delete(seq); closeDragHost(); cb({ result: 'error', message: MODULE_ERR }); }
 };
 
 // ---------------------------------------------------------------------------
@@ -392,10 +413,17 @@ chrome.runtime.onConnect.addListener(port => {
       case 'clearFinished':
         for (const j of [...jobs.values()]) if (isTerminal(j.status)) removeJob(j.id);
         break;
-      case 'serve': {
-        const job = msg.id ? jobs.get(msg.id) : null;
-        const path = job ? job.finalPath : (typeof msg.path === 'string' ? msg.path : '');
-        requestServe(path, r => post(port, { type: 'serve', id: msg.id, path, ...r }));
+      case 'dragPrepare': {
+        const h = ensureDragHost();
+        const path = dragPathOf(msg);
+        if (h && path && await isKnownFile(path)) post(h.port, { prepare: path });
+        break;
+      }
+      case 'drag': {
+        const path = dragPathOf(msg);
+        const reply = r => post(port, { type: 'drag', id: msg.id, path, result: r.result || 'error', message: r.message || '' });
+        if (!(await isKnownFile(path))) { reply({ result: 'error', message: 'File not available.' }); break; }
+        requestDrag(path, msg.at, reply);
         break;
       }
     }

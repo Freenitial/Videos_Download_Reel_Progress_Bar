@@ -9,11 +9,6 @@
   const PRESET_LABELS = { best: 'Best', '1080': '1080p', '720': '720p', size25: '≤ 25 MB' };
   const SITE_LABELS = { youtube: 'YouTube', facebook: 'Facebook', instagram: 'Instagram', tiktok: 'TikTok', twitter: 'X' };
   const PAGE_SIZE = 50;
-  const MIME_BY_EXT = {
-    mp4: 'video/mp4', webm: 'video/webm', mkv: 'video/x-matroska', mov: 'video/quicktime', flv: 'video/x-flv', '3gp': 'video/3gpp',
-    mp3: 'audio/mpeg', m4a: 'audio/mp4', aac: 'audio/aac', opus: 'audio/ogg', ogg: 'audio/ogg', wav: 'audio/wav',
-    gif: 'image/gif', webp: 'image/webp'
-  };
 
   const $ = id => document.getElementById(id);
   const el = (tag, props = {}, children = []) => {
@@ -27,8 +22,6 @@
     for (const c of [].concat(children)) if (c) e.append(c);
     return e;
   };
-  const fileNameOf = p => String(p || '').split(/[\\/]/).pop();
-  const mimeOf = p => MIME_BY_EXT[(fileNameOf(p).split('.').pop() || '').toLowerCase()] || 'application/octet-stream';
   const fmtBytes = n => {
     if (!n || n <= 0) return '';
     const u = ['B', 'KB', 'MB', 'GB']; let i = 0, v = n;
@@ -43,9 +36,10 @@
     return sameDay ? d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : d.toLocaleDateString([], { day: '2-digit', month: 'short' }) + ' ' + d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
   };
   const flash = (b, text) => {
-    const label = b.textContent;
+    if (!b._label) b._label = b.textContent;
+    clearTimeout(b._flashTimer);
     b.textContent = text;
-    setTimeout(() => { b.textContent = label; }, 1800);
+    b._flashTimer = setTimeout(() => { b.textContent = b._label; }, 1800);
   };
   const sendMessage = msg => new Promise(resolve => {
     try { chrome.runtime.sendMessage(msg, r => resolve(chrome.runtime.lastError ? { success: false } : (r || { success: false }))); }
@@ -114,27 +108,36 @@
   // ---------------------------------------------------------------------------
   // Buttons shared by active and history items
   // ---------------------------------------------------------------------------
-  const serveWaiters = new Map();   // path -> callbacks
+  // The press is handed to the native host, which drags the real file once the
+  // pointer moves (see background.js).
+  const dragWaiters = new Map();   // path -> callbacks
+  const endDrag = (path, result) => {
+    const list = dragWaiters.get(path) || [];
+    dragWaiters.delete(path);
+    list.forEach(cb => cb(result));
+  };
+  // A file dropped back on this panel would replace it: refused while a drag runs.
+  ['dragenter', 'dragover', 'drop'].forEach(type => window.addEventListener(type, e => {
+    if (!dragWaiters.size || !e.dataTransfer || ![...e.dataTransfer.types].includes('Files')) return;
+    e.preventDefault();
+    e.dataTransfer.dropEffect = 'none';
+  }, true));
   const mkDrag = path => {
-    const b = el('button', { text: '⿻ Drag', title: 'Drag the file to a folder, the desktop or another application' });
-    b.draggable = true;
-    let url = '', pending = false;
-    const prepare = () => {
-      if (url || pending) return;
-      pending = true;
-      const list = serveWaiters.get(path) || [];
-      list.push(r => { pending = false; if (r.url) url = r.url; else if (r.error) b.title = r.error; });
-      serveWaiters.set(path, list);
-      if (list.length === 1) post({ type: 'serve', path });
-    };
-    ['pointerenter', 'pointerdown', 'focus'].forEach(t => b.addEventListener(t, prepare));
-    b.addEventListener('dragstart', e => {
-      if (!url) { e.preventDefault(); prepare(); flash(b, 'Preparing… drag again'); return; }
-      e.dataTransfer.setData('DownloadURL', `${mimeOf(path)}:${fileNameOf(path)}:${url}`);
-      e.dataTransfer.setData('text/plain', path);
-      e.dataTransfer.effectAllowed = 'copy';
+    const b = el('button', { text: '⿻ Drag', title: 'Hold and drag the file to a folder, the desktop or an app', class: 'drag' });
+    const warm = () => post({ type: 'dragPrepare', path });
+    b.addEventListener('pointerenter', warm);
+    b.addEventListener('focus', warm);
+    b.addEventListener('pointerdown', e => {
+      if (e.button !== 0 || b.disabled) return;
+      e.preventDefault();
+      const list = dragWaiters.get(path) || [];
+      list.push(r => {
+        if (r.result === 'released') flash(b, 'Hold and drag');
+        else if (r.result === 'error') { flash(b, 'Failed'); if (r.message) b.title = r.message; }
+      });
+      dragWaiters.set(path, list);
+      if (!post({ type: 'drag', path, at: Date.now() })) endDrag(path, { result: 'error', message: 'Extension unavailable' });
     });
-    b.addEventListener('click', () => { prepare(); flash(b, 'Drag me to a folder'); });
     return b;
   };
   const mkHost = (label, type, payload, done) => {
@@ -163,8 +166,11 @@
   const jobs = new Map();
   let port = null;
   const post = msg => {
-    if (!port) connect();
-    try { port.postMessage(msg); } catch {}
+    try {
+      if (!port) connect();
+      port.postMessage(msg);
+      return true;
+    } catch { port = null; return false; }
   };
   const renderActive = () => {
     const box = $('active');
@@ -202,13 +208,13 @@
       if (msg.type === 'list') { jobs.clear(); (msg.jobs || []).forEach(j => jobs.set(j.id, j)); scheduleActive(); }
       else if (msg.type === 'job') { jobs.set(msg.job.id, msg.job); scheduleActive(); }
       else if (msg.type === 'removed') { jobs.delete(msg.id); scheduleActive(); }
-      else if (msg.type === 'serve') {
-        const list = serveWaiters.get(msg.path) || [];
-        serveWaiters.delete(msg.path);
-        list.forEach(cb => cb(msg));
-      }
+      else if (msg.type === 'drag') endDrag(msg.path, msg);
     });
-    port.onDisconnect.addListener(() => { void chrome.runtime.lastError; port = null; });
+    port.onDisconnect.addListener(() => {
+      void chrome.runtime.lastError;
+      port = null;
+      for (const path of [...dragWaiters.keys()]) endDrag(path, { result: 'error', message: 'Extension restarted' });
+    });
     port.postMessage({ type: 'hello' });
   };
   connect();

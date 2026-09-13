@@ -125,7 +125,7 @@ if ($script:VerySilent) { Close-ProgressBar } else { Update-LoadingPopup 5 "Load
 
 # ----------------------------- CONFIG (ID/version from build.ps1) -----------------------
 $ExtId       = 'olmpldphnohichgojfebcgbciknbmpfm'
-$ExtVersion  = '2.2'                       # FALLBACK only; setup reads the real version from ext.crx
+$ExtVersion  = '2.3'                       # FALLBACK only; setup reads the real version from ext.crx
 $HostName    = 'freenitial_yt_dlp_host'    # must match sendNativeMessage(...) in background.js
 $ServerPort  = 47653                       # loopback port; must match build.ps1
 $InstallMode = 'normal_installed'          # 'normal_installed' = user can disable/remove ; 'force_installed' = locked
@@ -172,16 +172,24 @@ function Step { param([int]$Pct, [string]$FrMsg, [string]$EnMsg)
 
 # ------------------------------------------------------------------ UI + logging helpers
 # Both boxes are only ever used on TERMINAL paths -> close the bar for good first.
+# Owned by an invisible topmost window: a browser relaunched by the setup must not
+# bury the box (the elevated setup would wait behind it).
+function Show-TopMessage { param([string]$Msg, [System.Windows.Forms.MessageBoxIcon]$Icon = [System.Windows.Forms.MessageBoxIcon]::None)
+    $owner = New-Object System.Windows.Forms.Form
+    $owner.TopMost = $true; $owner.ShowInTaskbar = $false; $owner.FormBorderStyle = 'None'; $owner.Opacity = 0
+    $owner.StartPosition = 'CenterScreen'; $owner.Width = 1; $owner.Height = 1
+    try { $owner.Show(); $owner.Activate(); [void][System.Windows.Forms.MessageBox]::Show($owner, $Msg, 'Videos Download - Setup', [System.Windows.Forms.MessageBoxButtons]::OK, $Icon) }
+    finally { $owner.Close(); $owner.Dispose() } }
 function Show-ErrorBox { param([string]$Msg)
     Log ("ERRORBOX: " + $Msg)
     Close-ProgressBar
     if ($script:Silent) { return }
-    [void][System.Windows.Forms.MessageBox]::Show($Msg, 'Videos Download - Setup', [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Error) }
+    Show-TopMessage $Msg ([System.Windows.Forms.MessageBoxIcon]::Error) }
 function Show-InfoBox  { param([string]$Msg)
     Log ("INFOBOX: " + $Msg)
     Close-ProgressBar
     if ($script:Silent) { return }
-    [void][System.Windows.Forms.MessageBox]::Show($Msg, 'Videos Download - Setup', [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Information) }
+    Show-TopMessage $Msg ([System.Windows.Forms.MessageBoxIcon]::Information) }
 $script:LogFile = $null
 function Log { param([string]$Msg)
     Write-Host $Msg
@@ -432,6 +440,14 @@ function Invoke-CoreUninstall {
             Remove-Item -Path (Join-Path ($b.NmRoot -replace '^HKLM:', 'HKCU:') $HostName) -Force -ErrorAction SilentlyContinue
         } catch { $errs += "$($b.Name): $($_.Exception.Message)" }
     }
+    # Module processes still running from the install folder (a download, the drag
+    # helper the browser keeps open, a loopback server) lock its files and, as their
+    # working directory, the folder itself.
+    try {
+        Get-CimInstance Win32_Process -ErrorAction Stop |
+            Where-Object { $_.ProcessId -ne $PID -and ([string]$_.CommandLine -match 'freenitial_yt_dlp_(script\.ps1|wrapper\.bat)|Videos Download - Reel Progress Bar\\+localserver\.ps1' -or ($_.ExecutablePath -and $_.ExecutablePath.StartsWith($InstallDir + '\', [StringComparison]::OrdinalIgnoreCase))) } |
+            ForEach-Object { try { Stop-Process -Id $_.ProcessId -Force -ErrorAction Stop; Log "Stopped module process $($_.Name) ($($_.ProcessId))." } catch {} }
+    } catch {}
     if (Test-Path $InstallDir) {
         # Retry: a just-stopped server task / running native host releases its handles asynchronously.
         for ($i = 0; $i -lt 3; $i++) {
@@ -501,7 +517,7 @@ catch { Show-ErrorBox "Pre-flight check failed:`n$($_.Exception.Message)"; retur
 Step 10 'Détection des navigateurs…' 'Detecting browsers…'
 $installedBrowsers = @(Get-InstalledBrowsers)
 if ($installedBrowsers.Count -eq 0) {
-    $m = if ($Fr) { "Aucun navigateur compatible (Google Chrome ou Brave) trouvé.`n`nInstalle-en un et relance le setup." }
+    $m = if ($Fr) { "Aucun navigateur compatible (Google Chrome ou Brave) trouvé.`n`nInstallez-en un et relancez le setup." }
          else     { "No supported browser (Google Chrome or Brave) was found.`n`nInstall one and run this setup again." }
     Show-ErrorBox $m
     return
@@ -706,7 +722,7 @@ catch {
 # ------------------------------------------------------------------ 8) native host manifest (one file, registered per browser)
 try {
     $hostJsonPath = Join-Path $InstallDir "$HostName.json"
-    $escPath = $wrapperPath -replace '\\', '\\\\'
+    $escPath = $wrapperPath.Replace('\', '\\')
     $hostJson = @"
 {
   "name": "$HostName",
@@ -768,8 +784,8 @@ if ($running.Count -gt 0) {
     $rnames = ($running | ForEach-Object { $_.Name }) -join $sep
     if (-not $script:Silent) {
         Hide-ProgressBar                                 # popup on screen -> bar steps aside
-        $msg = if ($Fr) { "Cliquez sur OK pour redemarrer $rnames et appliquer la mise a jour." } else { "Click OK to restart $rnames and apply the update." }
-        [void][System.Windows.Forms.MessageBox]::Show($msg, '', [System.Windows.Forms.MessageBoxButtons]::OK)
+        $msg = if ($Fr) { "Cliquez sur OK pour redémarrer $rnames et appliquer la mise à jour." } else { "Click OK to restart $rnames and apply the update." }
+        Show-TopMessage $msg
         Show-ProgressBar                                 # work continues -> bar comes back
     }
 }
@@ -802,10 +818,10 @@ Log "Forced clean reinstall; relaunched: $allNames"
 Step 100 'Terminé.' 'Done.'
 
 if ($running.Count -eq 0) {
-    $t1 = if ($Fr) { 'Installation terminee.' } else { 'Setup complete.' }
-    $t2 = if ($Fr) { "Le navigateur va s'ouvrir pour appliquer la mise a jour." } else { 'The browser will open to apply the update.' }
+    $t1 = if ($Fr) { 'Installation terminée.' } else { 'Setup complete.' }
+    $t2 = if ($Fr) { "Le navigateur a été relancé pour appliquer la mise à jour." } else { 'The browser was relaunched to apply the update.' }
     $modeNote = ''
-    if ($InstallMode -eq 'normal_installed') { $modeNote = if ($Fr) { 'Vous pouvez la desactiver/supprimer a tout moment.' } else { 'You can disable/remove it anytime.' } }
+    if ($InstallMode -eq 'normal_installed') { $modeNote = if ($Fr) { 'Vous pouvez la désactiver ou la supprimer à tout moment.' } else { 'You can disable/remove it anytime.' } }
     Show-InfoBox ($t1 + $NL + $NL + $allNames + $NL + $t2 + $NL + $modeNote + $NL + "Log: $script:LogFile")
 }
 Close-ProgressBar   # end of the run (also covers the silent / browsers-were-running paths)
