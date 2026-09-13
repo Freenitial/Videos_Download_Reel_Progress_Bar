@@ -1,0 +1,100 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Downloads</title>
+<style>
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; }
+  body { margin: 0; width: 440px; max-height: 590px; background: #0a1016; color: #e8eef3; font: 13px 'Segoe UI', Roboto, sans-serif; }
+  header { display: flex; align-items: center; gap: 8px; padding: 10px 12px; border-bottom: 1px solid rgba(255,255,255,.08); position: sticky; top: 0; background: #0a1016; z-index: 2; }
+  header h1 { font-size: 14px; margin: 0; flex: 1; }
+  .badge { font-size: 11px; color: #9fb3c8; }
+  main { overflow-y: auto; max-height: 540px; }
+  section { padding: 8px 12px 10px; }
+  section + section { border-top: 1px solid rgba(255,255,255,.06); }
+  h2 { font-size: 11px; text-transform: uppercase; letter-spacing: .06em; color: #7f95a5; margin: 2px 0 8px; display: flex; align-items: center; gap: 6px; }
+  h2 .spacer { flex: 1; }
+  .empty { color: #7f95a5; font-size: 12px; padding: 4px 0 2px; }
+  .item { display: flex; gap: 9px; padding: 7px 0; border-bottom: 1px solid rgba(255,255,255,.05); }
+  .item:last-child { border-bottom: none; }
+  .thumb { width: 46px; height: 46px; flex: none; border-radius: 6px; background: rgba(255,255,255,.08); overflow: hidden; display: flex; align-items: center; justify-content: center; color: #7f95a5; font-size: 18px; }
+  .thumb img { width: 100%; height: 100%; object-fit: cover; }
+  .body { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 3px; }
+  .title { font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: inherit; text-decoration: none; }
+  a.title:hover { text-decoration: underline; }
+  .sub { font-size: 11px; color: #9fb3c8; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .sub.err { color: #fca5a5; white-space: normal; }
+  .track { height: 5px; background: rgba(255,255,255,.14); border-radius: 4px; overflow: hidden; }
+  .fill { height: 100%; width: 0; background: linear-gradient(90deg,#2563eb,#3b82f6); transition: width .25s; }
+  .row { display: flex; gap: 5px; flex-wrap: wrap; margin-top: 2px; }
+  button, .btn { font: 12px 'Segoe UI', Roboto, sans-serif; color: #e8eef3; background: rgba(255,255,255,.06); border: 1px solid rgba(255,255,255,.15); border-radius: 5px; padding: 3px 8px; cursor: pointer; white-space: nowrap; }
+  button:hover { background: rgba(255,255,255,.13); }
+  button:disabled { opacity: .4; cursor: default; }
+  button.primary { background: #2563eb; border-color: #2563eb; }
+  button.primary:hover { background: #3b82f6; }
+  button.link { background: none; border: none; color: #93c5fd; padding: 0 2px; }
+  button.link:hover { text-decoration: underline; background: none; }
+  button[draggable="true"] { cursor: grab; }
+  .missing .title, .missing .thumb { opacity: .5; }
+  .setting { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 5px 0; }
+  .setting label { flex: 1; }
+  .setting .hint { display: block; font-size: 11px; color: #7f95a5; }
+  input[type="text"] { width: 100%; background: #111a22; color: #e8eef3; border: 1px solid rgba(255,255,255,.18); border-radius: 5px; padding: 4px 6px; font: 12px Consolas, monospace; }
+  input[type="text"].invalid { border-color: #ef4444; }
+  select { background: #111a22; color: #e8eef3; border: 1px solid rgba(255,255,255,.18); border-radius: 5px; padding: 3px 4px; }
+  .folder-row { display: flex; gap: 5px; margin-top: 4px; }
+  .pager { display: flex; justify-content: center; gap: 8px; padding-top: 6px; }
+  details summary { cursor: pointer; list-style: none; }
+  details summary::-webkit-details-marker { display: none; }
+  details summary h2::before { content: '▸'; font-size: 10px; }
+  details[open] summary h2::before { content: '▾'; }
+</style>
+</head>
+<body>
+<header>
+  <h1>⇩ Downloads</h1>
+  <span class="badge" id="count"></span>
+  <button id="open-folder" title="Open the download folder">🗁 Open folder</button>
+</header>
+<main>
+  <section id="active-section">
+    <h2>Active</h2>
+    <div id="active"></div>
+  </section>
+  <section>
+    <h2>History <span class="spacer"></span><button class="link" id="clear-history">Clear history</button></h2>
+    <div id="history"></div>
+    <div class="pager" id="pager"></div>
+  </section>
+  <section>
+    <details id="settings-box">
+      <summary><h2>Settings</h2></summary>
+      <div class="setting" style="flex-direction:column;align-items:stretch">
+        <label for="download-dir">Download folder <span class="hint">Empty = the Windows Downloads folder</span></label>
+        <div class="folder-row">
+          <input type="text" id="download-dir" spellcheck="false" placeholder="C:\Users\…\Downloads">
+          <button id="pick-folder" title="Choose a folder">Choose…</button>
+          <button id="default-folder" title="Use the Windows Downloads folder">Default</button>
+        </div>
+      </div>
+      <div class="setting"><label for="site-subfolders">Subfolder per site <span class="hint">YouTube, TikTok, Instagram, Facebook, X</span></label><input type="checkbox" id="site-subfolders"></div>
+      <div class="setting"><label for="same-volume">Same volume on all sites</label><input type="checkbox" id="same-volume"></div>
+      <div class="setting"><label for="preset">Quality</label>
+        <select id="preset">
+          <option value="best">Best</option>
+          <option value="1080">1080p</option>
+          <option value="720">720p</option>
+          <option value="size25">≤ 25 MB</option>
+        </select>
+      </div>
+      <div class="setting"><label for="precise-cut">Precise cut (re-encode)</label><input type="checkbox" id="precise-cut"></div>
+      <div class="setting"><label for="convert-mp4">Convert video to MP4</label><input type="checkbox" id="convert-mp4"></div>
+      <div class="setting"><label for="beep">Beep when done</label><input type="checkbox" id="beep"></div>
+      <div class="setting"><label for="copy-end">Copy when done</label><input type="checkbox" id="copy-end"></div>
+    </details>
+  </section>
+</main>
+<script src="popup.js"></script>
+</body>
+</html>

@@ -125,7 +125,7 @@ if ($script:VerySilent) { Close-ProgressBar } else { Update-LoadingPopup 5 "Load
 
 # ----------------------------- CONFIG (ID/version from build.ps1) -----------------------
 $ExtId       = 'olmpldphnohichgojfebcgbciknbmpfm'
-$ExtVersion  = '2.1'                       # FALLBACK only; setup reads the real version from ext.crx
+$ExtVersion  = '2.2'                       # FALLBACK only; setup reads the real version from ext.crx
 $HostName    = 'freenitial_yt_dlp_host'    # must match sendNativeMessage(...) in background.js
 $ServerPort  = 47653                       # loopback port; must match build.ps1
 $InstallMode = 'normal_installed'          # 'normal_installed' = user can disable/remove ; 'force_installed' = locked
@@ -156,6 +156,8 @@ $BrowserCatalog = @(
 )
 
 $ErrorActionPreference = 'Stop'
+# GitHub requires TLS 1.2; older Windows 10 builds do not enable it by default for .NET.
+try { [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12 } catch {}
 $self = $batFile
 if ([string]::IsNullOrEmpty($scriptDir)) { $scriptDir = if ($self) { Split-Path -Parent $self } else { (Get-Location).Path } }
 Add-Type -AssemblyName System.Windows.Forms
@@ -439,6 +441,12 @@ function Invoke-CoreUninstall {
         }
         if (Test-Path $InstallDir) { $errs += "folder: still present (a file may be in use - close the browser and retry)" }
     }
+    # Folder left by 1.x installs (same module under an older name).
+    $legacyDir = "$env:ProgramData\b-Videos Download - Reel Progress Bar"
+    if ((Test-Path -LiteralPath $legacyDir) -and (Test-Path -LiteralPath (Join-Path $legacyDir 'freenitial_yt_dlp_script.ps1'))) {
+        Remove-Item -LiteralPath $legacyDir -Recurse -Force -ErrorAction SilentlyContinue
+        if (Test-Path -LiteralPath $legacyDir) { $errs += "legacy folder: still present ($legacyDir)" }
+    }
     return , $errs
 }
 
@@ -528,6 +536,11 @@ try {
     $logDir = Join-Path $InstallDir 'Logs'; New-Item -ItemType Directory -Force -Path $logDir | Out-Null
     $script:LogFile = Join-Path $logDir ('setup_{0}.log' -f (Get-Date -Format 'yyyyMMdd_HHmmss'))
     Log ("Selected browsers: " + (($selected | ForEach-Object { $_.Name }) -join ', ') + " ; mode=$InstallMode")
+    # Everyone gets Modify on the files of the install folder: the native host runs
+    # unelevated and must be able to replace yt-dlp.exe / deno.exe when they self-update.
+    # Inherit-only on files, so the folder itself cannot be renamed or deleted by users.
+    & icacls.exe $InstallDir /grant '*S-1-1-0:(OI)(IO)M' /C /Q | Out-Null
+    if ($LASTEXITCODE -eq 0) { Log "Granted Everyone Modify on install files." } else { Log "WARN: icacls grant failed (exit $LASTEXITCODE)" }
 }
 catch { Show-ErrorBox "Cannot create install folder '$InstallDir':`n$($_.Exception.Message)"; return }
 
@@ -667,6 +680,9 @@ try {
 $serverScript = Join-Path $InstallDir 'localserver.ps1'
 [IO.File]::WriteAllText($serverScript, $serverScriptText, (New-Object System.Text.UTF8Encoding($false)))
 Log "Wrote loopback server script."
+# The server runs as SYSTEM: its script must stay writable by administrators only.
+& icacls.exe $serverScript /inheritance:r /grant:r '*S-1-5-18:F' '*S-1-5-32-544:F' '*S-1-5-32-545:RX' /C /Q | Out-Null
+if ($LASTEXITCODE -eq 0) { Log "Locked loopback server script ACL." } else { Log "WARN: icacls lock failed (exit $LASTEXITCODE)" }
 
 # ------------------------------------------------------------------ 7) register + start the server task (detect across selected browsers)
 Step 72 'Enregistrement du serveur local…' 'Registering local server…'

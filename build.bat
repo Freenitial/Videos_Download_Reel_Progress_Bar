@@ -91,8 +91,17 @@ foreach ($x in @(
 $E = $t.CreateType()
 $mg = $M::AllocHGlobal(48)
 function Invoke-LoadingPump { try { while ($E::PeekMessageW($mg, [IntPtr]::Zero, 0, 0, 1)) { $null = $E::TranslateMessage($mg); $null = $E::DispatchMessageW($mg) } } catch {} }
-function Update-LoadingPopup([int]$pct, [string]$s) { $null = $A::SendMessageW($hb, 0x402, [IntPtr]$pct, [IntPtr]::Zero); if ($s) { $null = $E::SetWindowTextW($hl, $s) }; try { Invoke-LoadingPump } catch {} }
-function Close-LoadingPopup { $null = $E::DestroyWindow($hw); try { Invoke-LoadingPump } catch {}; $M::FreeHGlobal($mg) }
+function Update-LoadingPopup([int]$pct, [string]$s) { if ($popupState.Closed) { return }; $null = $A::SendMessageW($hb, 0x402, [IntPtr]$pct, [IntPtr]::Zero); if ($s) { $null = $E::SetWindowTextW($hl, $s) }; try { Invoke-LoadingPump } catch {} }
+# Runs once: the window and the message buffer are released on the first call only
+# (the flag lives in a hashtable so the function can change it from its own scope).
+$popupState = @{ Closed = $false }
+function Close-LoadingPopup {
+    if ($popupState.Closed) { return }
+    $popupState.Closed = $true
+    $null = $E::DestroyWindow($hw)
+    try { Invoke-LoadingPump } catch {}
+    $M::FreeHGlobal($mg)
+}
 
 function Show-Result([string]$Title, [string]$Msg, [string]$Icon) {
     Add-Type -AssemblyName System.Windows.Forms
@@ -118,7 +127,7 @@ try {
     Update-LoadingPopup 5 "Validating inputs..."
     $srcManifest = Join-Path $SrcDir 'manifest.json'
     if (-not (Test-Path -LiteralPath $srcManifest)) { throw "manifest.json not found in $SrcDir" }
-    $extFiles = @('manifest.json', 'content.js', 'background.js')
+    $extFiles = @('manifest.json', 'volume-lock.js', 'volume-bridge.js', 'content.js', 'background.js', 'popup.html', 'popup.js')
     foreach ($f in $extFiles) { if (-not (Test-Path -LiteralPath (Join-Path $SrcDir $f))) { throw "Required extension file missing: $f" } }
     New-Item -ItemType Directory -Force -Path $OutDir | Out-Null
 

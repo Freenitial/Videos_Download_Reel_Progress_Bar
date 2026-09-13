@@ -16,11 +16,15 @@ Add controls to Videos for supported websites :
 - X (Twitter)
 
 ## Features : 
-- Progress bar for reels with memorized volume
-- Download as Video (original)
-- Download and convert as MP4
+- Progress bar for reels with memorized volume, kept in sync with each site's own volume slider
+- Same volume on all sites (option)
+- Download as Video (original), with quality presets: Best, 1080p, 720p, ≤ 25 MB
+- Download and convert as MP4 (H.264 / AAC)
 - Download and convert as MP3
-- Cut / Trim
+- Cut / Trim, with In / Out from the playing position
+- Downloads history on the toolbar icon: show, copy, retry, or drag a file to any folder or application
+- Download folder and optional subfolder per site
+- Downloads keep running when the tab is closed
 
 ![image](https://github.com/user-attachments/assets/a7586200-3f58-4adc-9e0e-79d9a91f4d2d)
 
@@ -44,6 +48,6 @@ https://github.com/Freenitial/Videos_Download_Reel_Progress_Bar/releases/latest/
 ## How to build yourself
 
 1. Clone this repository.
-2. Run `build.bat` — it packs `manifest.json`, `content.js`, `background.js` and `icons/` into a signed CRX3 package, written as `ext.crx` at the repository root. Pure PowerShell, no Chrome or external tool required.
+2. Run `build.bat` — it packs `manifest.json`, `volume-lock.js`, `volume-bridge.js`, `content.js`, `background.js`, `popup.html`, `popup.js` and `icons/` into a signed CRX3 package, written as `ext.crx` at the repository root. Pure PowerShell, no Chrome or external tool required.
 3. First build: a signing key is generated automatically in `_signing\videos-download.pem`. The extension ID is derived from that key — **keep it private and back it up**: building with a different key produces a *different* extension ID (build.bat warns you if the ID no longer matches the one expected by `setup.bat`).
 4. Run `setup.bat` to install your freshly built `ext.crx` locally — it uses the files sitting next to it when present, and downloads the missing pieces (yt-dlp, ffmpeg, deno) from their official sources.

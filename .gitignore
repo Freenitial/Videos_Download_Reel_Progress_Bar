@@ -18,6 +18,7 @@ freenitial_yt_dlp_wrapper.bat
 
 # Local tooling / workspace — never publish
 .claude/
+_dev/
 RELEASE_NOTES.md
 
 # Logs / state
