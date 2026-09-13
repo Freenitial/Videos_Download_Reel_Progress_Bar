@@ -125,7 +125,7 @@ if ($script:VerySilent) { Close-ProgressBar } else { Update-LoadingPopup 5 "Load
 
 # ----------------------------- CONFIG (ID/version from build.ps1) -----------------------
 $ExtId       = 'olmpldphnohichgojfebcgbciknbmpfm'
-$ExtVersion  = '2.3'                       # FALLBACK only; setup reads the real version from ext.crx
+$ExtVersion  = '2.4'                       # FALLBACK only; setup reads the real version from ext.crx
 $HostName    = 'freenitial_yt_dlp_host'    # must match sendNativeMessage(...) in background.js
 $ServerPort  = 47653                       # loopback port; must match build.ps1
 $InstallMode = 'normal_installed'          # 'normal_installed' = user can disable/remove ; 'force_installed' = locked
@@ -575,10 +575,16 @@ function Invoke-DownloadUrl {
     if (-not (Test-Path $Dest) -or (Get-Item $Dest).Length -eq 0) { throw "Download failed or empty file: $Url" }
 }
 function Get-ModuleFile {
-    param([string]$Name, [string]$Url)
+    # -PreferDownload: fetch the latest copy, the file next to setup.bat only when offline
+    # (an old yt-dlp is refused by YouTube).
+    param([string]$Name, [string]$Url, [switch]$PreferDownload)
     $dest = Join-Path $InstallDir $Name; $local = Join-Path $scriptDir $Name
-    if (Test-Path -LiteralPath $local) { Copy-Item -LiteralPath $local -Destination $dest -Force; Log "Copied (offline): $Name" }
-    else { Log "Downloading: $Name"; Invoke-DownloadUrl -Url $Url -Dest $dest; Log "Downloaded: $Name" }
+    if ($PreferDownload) {
+        try { Log "Downloading: $Name"; Invoke-DownloadUrl -Url $Url -Dest $dest; Log "Downloaded: $Name"; return 'downloaded' }
+        catch { if (-not (Test-Path -LiteralPath $local)) { throw }; Log "Download failed, using the local copy: $Name ($($_.Exception.Message))" }
+    }
+    if (Test-Path -LiteralPath $local) { Copy-Item -LiteralPath $local -Destination $dest -Force; Log "Copied (offline): $Name"; return 'copied' }
+    Log "Downloading: $Name"; Invoke-DownloadUrl -Url $Url -Dest $dest; Log "Downloaded: $Name"; return 'downloaded'
 }
 
 # ------------------------------------------------------------------ 4) deploy module + extension payload
@@ -587,11 +593,14 @@ try {
     # The wrapper is generated below; host.json/updates.xml/localserver.ps1 are generated too;
     # yt-dlp/ffmpeg/deno come from their own official sources. No loose js/json/png is ever fetched.
     Step 24 'Déploiement du module…' 'Deploying module…'
-    Get-ModuleFile 'freenitial_yt_dlp_script.ps1'  "$DlBase/freenitial_yt_dlp_script.ps1"
+    $null = Get-ModuleFile 'freenitial_yt_dlp_script.ps1'  "$DlBase/freenitial_yt_dlp_script.ps1"
     Step 30 'Récupération de yt-dlp…' 'Fetching yt-dlp…'
-    Get-ModuleFile 'yt-dlp.exe'                     $YtDlpUrl
+    # A freshly downloaded yt-dlp is current: the first download does not check it again.
+    if ((Get-ModuleFile 'yt-dlp.exe' $YtDlpUrl -PreferDownload) -eq 'downloaded') {
+        try { [IO.File]::WriteAllText((Join-Path $InstallDir 'ytdlp_checked.txt'), (Get-Date).ToString('o')) } catch {}
+    }
     Step 40 "Récupération de l'extension…" 'Fetching the extension…'
-    Get-ModuleFile 'ext.crx'                        "$DlBase/ext.crx"
+    $null = Get-ModuleFile 'ext.crx'                        "$DlBase/ext.crx"
     Step 45 'Récupération de ffmpeg…' 'Fetching ffmpeg…'
     $ffExes  = @('ffmpeg.exe', 'ffprobe.exe', 'ffplay.exe')
     $haveAll = -not (($ffExes | ForEach-Object { Test-Path (Join-Path $scriptDir $_) }) -contains $false)

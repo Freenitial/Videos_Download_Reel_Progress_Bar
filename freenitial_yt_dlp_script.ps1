@@ -277,6 +277,7 @@ $denoPath      = Join-Path $basePath "deno.exe"
 $versionFile     = Join-Path $basePath "version.txt"        # written by setup.bat = installed CRX version
 $updateStateFile = Join-Path $basePath "update_state.txt"   # cached online-version verdict (throttled)
 $lastUpdateFile  = Join-Path $basePath "lastupdate.txt"     # stamped after a yt-dlp/deno/ffmpeg update pass
+$ytDlpCheckFile  = Join-Path $basePath "ytdlp_checked.txt"  # stamped after yt-dlp alone was brought up to date
 $updateLockFile  = Join-Path $basePath "update.lock"
 $encoderFile     = Join-Path $basePath "encoder.txt"
 $RepoOwnerRepo   = 'Freenitial/Videos_Download_Reel_Progress_Bar'
@@ -430,6 +431,31 @@ function Invoke-ToolUpdate {
         Update-FfmpegIfMissing
         try { Set-Content -LiteralPath $lastUpdateFile -Value (Get-Date).ToString('o') -Encoding UTF8 } catch { }
         return $true
+    } finally {
+        try { $lock.Dispose() } catch { }
+    }
+}
+# YouTube refuses the media of an outdated yt-dlp (HTTP 403). The detached pass keeps
+# it current every 4 h; when neither that pass nor a download checked it for a day
+# (new install, computer off for days), the download updates yt-dlp first.
+function Test-YtDlpStale {
+    foreach ($stamp in @($lastUpdateFile, $ytDlpCheckFile)) {
+        try { if ((Test-Path -LiteralPath $stamp) -and ((Get-Date) - (Get-Item -LiteralPath $stamp).LastWriteTime).TotalHours -lt 24) { return $false } } catch { }
+    }
+    return $true
+}
+function Update-YtDlpBeforeDownload {
+    $lock = Enter-UpdateLock 0
+    if (-not $lock) { return }   # another host is updating the tools: Wait-ToolsQuiescent waits for it
+    try {
+        Send-Progress 'update' 'Updating yt-dlp…'
+        try {
+            $up = Start-Process -FilePath $ytDlpPathEXE -ArgumentList @('--update-to', 'stable') -WindowStyle Hidden -PassThru
+            $null = $up.Handle
+            if (Wait-ProcCancelable $up -TimeoutSec 60) { Log "yt-dlp checked before the download (exit $($up.ExitCode))" }
+            else { Log "yt-dlp update before the download stopped (cancel or timeout)"; return }
+        } catch { Log "yt-dlp update before the download failed: $_"; return }
+        try { Set-Content -LiteralPath $ytDlpCheckFile -Value (Get-Date).ToString('o') -Encoding UTF8 } catch { }
     } finally {
         try { $lock.Dispose() } catch { }
     }
@@ -718,6 +744,7 @@ if ($mode -eq 'download') {
         }
     }
 
+    if (Test-YtDlpStale) { Update-YtDlpBeforeDownload }
     # Never launch yt-dlp while another host replaces it.
     Wait-ToolsQuiescent
     if (Test-Cancelled) { Log "Cancelled while waiting for a tool update"; [Environment]::Exit(0) }
@@ -779,6 +806,9 @@ if ($mode -eq 'download') {
 
     $tokens = @(
         '--no-mtime', '--newline', '--no-playlist', '--windows-filenames', '--no-warnings',
+        # yt-dlp otherwise writes its console output in the ANSI code page: accented
+        # paths and titles would reach the log and the error messages garbled.
+        '--encoding', 'utf-8',
         '--socket-timeout', '30', '--retries', '10', '--fragment-retries', '10',
         '--progress-template', 'download:[[PROG]]|%(progress._percent_str)s|%(progress._speed_str)s|%(progress._eta_str)s|%(progress.downloaded_bytes)s|%(progress.total_bytes)s|%(progress.total_bytes_estimate)s',
         '--print-to-file', 'before_dl:%(.{title,uploader,duration,thumbnail})j', $metaFile,
@@ -1045,13 +1075,14 @@ if ($mode -eq 'download') {
     Send-Progress 'prepare' 'Analyzing video…'
     try {
         $run = Invoke-YtDlpRun
-        # Site changes break extractors until yt-dlp is updated: when the binary is older
-        # than a day, update it now and try once more.
+        # Site changes break extractors, and YouTube refuses the media of outdated clients
+        # (403), until yt-dlp is updated: when the binary is older than a day, update it
+        # now and try once more.
         if (-not $run.Aborted -and $run.ExitCode -ne 0) {
             $errLine = & $lastErrorLine
             $ytAgeH = 0
             try { $ytAgeH = ((Get-Date) - (Get-Item -LiteralPath $ytDlpPathEXE).LastWriteTime).TotalHours } catch { }
-            if ($errLine -match 'Unable to extract|Unsupported URL|HTTP Error 400|Requested format is not available|nsig extraction|Signature extraction|Failed to extract' -and $ytAgeH -ge 24) {
+            if ($errLine -match 'Unable to extract|Unsupported URL|HTTP Error 40[03]|Requested format is not available|nsig extraction|Signature extraction|Failed to extract' -and $ytAgeH -ge 24) {
                 Log "Extractor error with a $([int]$ytAgeH) h old yt-dlp: updating then retrying"
                 if (-not (Invoke-ToolUpdate -Force -Report)) { Wait-ToolsQuiescent }
                 if (Test-Cancelled) { Remove-DownloadTemp $tempDir $metaFile $pathFile; [Environment]::Exit(0) }

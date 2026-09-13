@@ -25,6 +25,9 @@ RELEASE_NOTES.md
 Logs/
 lastupdate.txt
 update_state.txt
+ytdlp_checked.txt
+update.lock
+encoder.txt
 version.txt
 temp_updated_script.ps1
 temp_native_message.json
